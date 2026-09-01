@@ -3,8 +3,23 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic import field_validator
 
 def now() -> datetime: return datetime.now(timezone.utc)
+
+class ModelConfig(BaseModel):
+    model_id: str
+    provider_type: str
+    base_url: str = ""
+    model_name: str
+    enabled: bool = True
+    timeout: float = 120
+    credential_ref: str | None = None
+    @field_validator("timeout")
+    @classmethod
+    def timeout_positive(cls, value):
+        if value <= 0: raise ValueError("timeout must be positive")
+        return value
 
 class Role(StrEnum):
     PM = "pm"
