@@ -100,3 +100,17 @@ Observable, Replayable, Reproducible, Comparable, Structured, Safe Local Executi
 ## 보안 / 주의사항
 
 API key와 secret은 커밋하지 않습니다. 도구는 mission workspace 안에서만 동작해야 하며 arbitrary shell execution은 기본 활성화하지 않습니다. 현재 local research/development 용도입니다.
+
+## PHASE 3 실행
+
+현재 데모는 `PM → Developer → QA` 순서로 동작합니다. Developer가 workspace를 검사하고 `edit_file`로 인증 fixture를 수정한 뒤 QA가 자신의 `run_test`로 pytest를 실행합니다. QA가 실패하면 bounded retry 범위에서 Developer와 QA가 다시 실행됩니다.
+
+실행 경로는 `PromptCompiler → ModelRequest → FakeModelProvider → ModelResponse(tool_call) → ToolRegistry → ToolResult → 다음 ModelRequest → structured output`입니다. AgentRun과 도구 실행은 TraceRecorder에 기록되고 edit/handoff safe boundary에서 checkpoint와 WorkspaceSnapshot을 생성합니다.
+
+```bash
+source .venv/bin/activate
+pytest -q
+uvicorn app.main:app --reload
+```
+
+API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 제공합니다. 현재 저장소는 in-memory이고 FakeModelProvider만 사용합니다. 실제 LLM adapter, frontend, Blackbox UI, arbitrary fork/replay UI, interview, HR/promotion, distributed execution은 아직 없습니다.

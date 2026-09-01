@@ -6,16 +6,22 @@ from .models import AgentState, CheckpointState, SkillProfile, SkillVersion, Tra
 
 class ModelRequest(BaseModel):
     messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]] = []
+    role: str = ""
+    expected_output: str = ""
+    metadata: dict[str, Any] = {}
     response_schema: str | None = None
-
-class ModelResponse(BaseModel):
-    output: dict[str, Any]
-    usage: dict[str, Any] = {}
-    latency_ms: float | None = None
 
 class ToolCall(BaseModel):
     name: str
     arguments: dict[str, Any] = {}
+
+class ModelResponse(BaseModel):
+    kind: str = "final"
+    output: dict[str, Any] = {}
+    tool_call: ToolCall | None = None
+    usage: dict[str, Any] = {}
+    latency_ms: float | None = None
 
 class ToolResult(BaseModel):
     success: bool

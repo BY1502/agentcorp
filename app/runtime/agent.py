@@ -1,0 +1,22 @@
+from uuid import UUID
+from app.domain.contracts import ModelRequest
+from app.domain.models import AgentState, TraceEvent
+
+class BasicAgentRuntime:
+    def __init__(self, provider, compiler, tools, recorder, mission_id, run_id, checkpoint=None): self.provider=provider; self.compiler=compiler; self.tools=tools; self.recorder=recorder; self.mission_id=mission_id; self.run_id=run_id; self.seq=0; self.checkpoint=checkpoint
+    def emit(self, typ, agent_id, payload=None): self.seq+=1; self.recorder.record(TraceEvent(mission_id=self.mission_id,mission_run_id=self.run_id,agent_run_id=agent_id,sequence=len(self.recorder.for_run(self.run_id))+1,event_type=typ,payload=payload or {}))
+    def run(self, agent_run_id: UUID, state: AgentState) -> AgentState:
+        self.emit("agent_started",agent_run_id)
+        while not state.finished:
+            if state.profile is None: raise ValueError("agent skill profile is required")
+            prompt=self.compiler.compile({"messages":state.messages,"handoff":state.handoffs},state.profile)
+            self.emit("prompt_compiled",agent_run_id,{"checksums":prompt["skill_checksums"]})
+            self.emit("model_request",agent_run_id,{"role":state.role.value,"message_count":len(prompt["messages"])})
+            response=self.provider.complete(ModelRequest(messages=prompt["messages"],role=state.role.value,metadata={"agent_run_id":str(agent_run_id)})); self.emit("model_response",agent_run_id,{"kind":response.kind,"output":response.output})
+            if response.kind=="tool" and response.tool_call:
+                self.emit("tool_call",agent_run_id,response.tool_call.model_dump()); result=self.tools.execute(response.tool_call); self.emit("tool_result",agent_run_id,result.model_dump()); state.tool_results.append(result.model_dump()); state.messages += [{"role":"tool","content":result.output or result.error or ""}]
+                if result.success and response.tool_call.name == "edit_file" and self.checkpoint:
+                    self.checkpoint(state)
+                    self.emit("checkpoint_created",agent_run_id,{"reason":"successful_edit_file"})
+            else: state.handoffs.update(response.output); state.finished=True
+        self.emit("agent_finished",agent_run_id); return state

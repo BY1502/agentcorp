@@ -29,6 +29,12 @@ class SkillProfile(BaseModel):
     skills: tuple[str, ...]
 
 class AgentState(BaseModel):
+    mission_id: UUID | None = None
+    mission_run_id: UUID | None = None
+    agent_run_id: UUID | None = None
+    role: Role = Role.PM
+    level: Level = Level.JUNIOR
+    profile: "SkillProfile | None" = None
     step: str = "start"
     messages: list[dict[str, Any]] = Field(default_factory=list)
     handoffs: dict[str, Any] = Field(default_factory=dict)
@@ -72,3 +78,19 @@ class TraceEvent(BaseModel):
     timestamp: datetime = Field(default_factory=now)
     payload: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+class MissionRunResult(BaseModel):
+    mission_run_id: UUID
+    mission_id: UUID
+    status: str
+    retry_count: int = 0
+    execution_manifest: ExecutionManifest
+    pm_agent_run_id: UUID
+    developer_agent_run_ids: list[UUID] = Field(default_factory=list)
+    qa_agent_run_ids: list[UUID] = Field(default_factory=list)
+    final_qa_result: dict[str, Any]
+    changed_files: list[str] = Field(default_factory=list)
+    tool_call_count: int = 0
+    event_count: int = 0
+    workspace_reference: str
+    checkpoint_ids: list[UUID] = Field(default_factory=list)
