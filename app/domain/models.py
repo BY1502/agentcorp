@@ -55,6 +55,8 @@ class AgentState(BaseModel):
     handoffs: dict[str, Any] = Field(default_factory=dict)
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
     finished: bool = False
+    allowed_tools: tuple[str, ...] = ()
+    expected_output: str | None = None
 
 class WorkspaceSnapshot(BaseModel):
     id: UUID = Field(default_factory=uuid4)
