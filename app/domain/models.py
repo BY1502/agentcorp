@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
+from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import field_validator
 
@@ -20,6 +21,40 @@ class ModelConfig(BaseModel):
     def timeout_positive(cls, value):
         if value <= 0: raise ValueError("timeout must be positive")
         return value
+
+def safe_endpoint_identity(base_url: str) -> str:
+    """Keep endpoint identity while removing userinfo and query credentials."""
+    if not base_url:
+        return ""
+    parts = urlsplit(base_url)
+    if not parts.scheme or not parts.hostname:
+        return base_url.split("?", 1)[0].split("#", 1)[0]
+    host = parts.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = f":{parts.port}" if parts.port is not None else ""
+    except ValueError:
+        port = ""
+    return urlunsplit((parts.scheme, f"{host}{port}", parts.path, "", ""))
+
+class ModelExecutionSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model_id: str
+    provider_type: str
+    model_name: str
+    base_url: str = ""
+    timeout: float
+
+    @classmethod
+    def from_config(cls, config: ModelConfig) -> "ModelExecutionSnapshot":
+        return cls(
+            model_id=config.model_id,
+            provider_type=config.provider_type,
+            model_name=config.model_name,
+            base_url=safe_endpoint_identity(config.base_url),
+            timeout=config.timeout,
+        )
 
 class Role(StrEnum):
     PM = "pm"
@@ -83,6 +118,7 @@ class ExecutionManifest(BaseModel):
     skill_versions: tuple[SkillVersion, ...]
     runtime_config: dict[str, Any]
     initial_workspace_snapshot_id: UUID
+    model_snapshot: ModelExecutionSnapshot | None = None
 
 class TraceEvent(BaseModel):
     model_config = ConfigDict(frozen=True)

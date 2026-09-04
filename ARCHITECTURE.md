@@ -48,14 +48,15 @@ agentcorp/
 
 All identifiers are UUIDs. Domain records use Pydantic models or frozen dataclasses where practical.
 
-- **Model**: provider configuration (`id`, display name, model name, base URL, optional API key, enabled flag, metadata). It identifies intelligence/configuration, not a worker.
+- **ModelConfig**: provider-neutral model configuration (`model_id`, `provider_type`, `base_url`, `model_name`, `enabled`, `timeout`, and optional `credential_ref`). It identifies intelligence/configuration, not a worker. Credential values and API keys are resolved only at runtime and are never part of reproducible records.
+- **ModelExecutionSnapshot**: immutable, serializable safe snapshot resolved once at run start. It contains `model_id`, `provider_type`, `model_name`, sanitized endpoint identity, and `timeout`; it excludes `credential_ref` and all secret values.
 - **Role**: PM, Developer, or QA.
 - **Level**: Junior, Senior, or Lead.
 - **SkillVersion**: immutable snapshot containing skill name, version, exact Markdown content, SHA-256 checksum, and creation time. A run stores the complete snapshots used, not only filesystem paths.
 - **Employee**: assignment of one Model to one Role and Level, plus selected skill identities. It is the runtime worker configuration.
 - **SkillProfile**: ordered collection of skills assigned to an employee/role. It is a domain/config abstraction, not a separate persistence aggregate in v0.1.
 - **Mission**: user-facing work specification, acceptance criteria, and maximum retries.
-- **ExecutionManifest**: immutable run-start snapshot containing mission identity/version, employee assignments, model identity/configuration references, role/level assignments, exact SkillVersion snapshots, runtime configuration (including max retries), and the initial workspace snapshot reference. It contains no secrets.
+- **ExecutionManifest**: immutable run-start snapshot containing mission identity/version, employee assignments, model identity/configuration references, role/level assignments, exact SkillVersion snapshots, runtime configuration (including max retries), the initial workspace snapshot reference, and the resolved `ModelExecutionSnapshot`. The model snapshot is frozen and contains no secrets.
 - **MissionRun**: one complete execution attempt, including its frozen ExecutionManifest and status.
 - **AgentRun**: one employee's execution inside a MissionRun, with role, level, model identity, status, and compiled skill snapshot references.
 - **TraceEvent**: immutable ordered observable event. Fields: id, mission ID, run ID, optional agent-run ID, sequence, event type, timestamp, payload, and metadata.
@@ -78,21 +79,21 @@ The following protocols define seams without forcing infrastructure into the dom
 - `TraceRecorder.record(event) -> TraceEvent`: assigns a monotonic per-run sequence and persists/collects immutable events.
 - `CheckpointManager.create(state, workspace_snapshot_id) -> Checkpoint` and `restore(id) -> CheckpointState`: serializes explicit Pydantic state and checkpoints only at configured safe boundaries.
 - `WorkspaceSnapshotManager.create(workspace) -> WorkspaceSnapshot` and `restore(snapshot_id, destination)`: owns independent filesystem snapshots; copied directories are sufficient for v0.1.
+- `ModelConfigRegistry.resolve(model_id?) -> ModelConfig`: resolves the requested model or configured default, rejecting unknown and disabled models without fallback. `ProviderFactory.create(config) -> ModelProvider` builds the selected provider once for the run.
 - `AgentRuntime.run(agent_run, state) -> AgentResult`: executes exactly one AgentRun and emits observable events for prompt compilation, model request/response, tool calls/results, validation, state updates, and finalization.
 - `MissionOrchestrator.run(mission, manifest) -> MissionResult`: invokes AgentRuntime for PM, Developer, and QA, applies bounded retries, creates handoff/ownership-boundary checkpoints, and completes the MissionRun.
 
-The runtime depends on these interfaces. SQLAlchemy repositories, filesystem skill loading, HTTP model adapters, and the fake provider implement them. Dependency direction:
+The application resolves `model_id` to `ModelConfig`, creates one provider through `ProviderFactory`, and freezes the safe model snapshot into `ExecutionManifest` before orchestration. PM, Developer, and QA therefore share the provider selected for that run; the registry is not consulted again during the run. SQLAlchemy repositories, filesystem skill loading, HTTP model adapters, and the fake provider implement the contracts. Dependency direction:
 
 ```text
 Mission -> ExecutionManifest -> MissionOrchestrator -> AgentRuntime
-                                      |                    |
-                                      +--------------------+--> ModelProvider
-                                                           +--> PromptCompiler
-                                                           +--> ToolExecutor
-                                                           +--> TraceRecorder
-                                                           +--> CheckpointManager
-                                                                                     |
-                                                                                     +--> WorkspaceSnapshotManager
+   |                                                        |
+   |                                                        +--> ModelProvider
+   |                                                        +--> PromptCompiler
+   |                                                        +--> ToolExecutor
+   |                                                        +--> TraceRecorder -> CheckpointManager -> WorkspaceSnapshotManager
+   |
+   +--> model_id -> ModelConfigRegistry -> ModelConfig -> ProviderFactory -> ModelProvider
 ```
 
 ## 5. Runtime and boundary rules
@@ -119,7 +120,7 @@ Trace payloads, manifests, and checkpoint state are JSON-serializable only. No a
 - `POST /missions/{id}/runs`
 - `GET /runs/{id}`, `GET /runs/{id}/events`
 
-Handlers remain thin and call services. Run creation initially executes synchronously to keep behavior easy to observe; background execution, streaming, and authentication are outside the first slice.
+`POST /missions/{id}/runs` accepts an optional JSON body `{ "model_id": "..." }`. When omitted, the configured default model is selected. Unknown models return 404 and disabled models return 409; neither path silently falls back. The response exposes only the safe immutable model snapshot. Handlers remain thin and call services. Run creation initially executes synchronously to keep behavior easy to observe; background execution, streaming, and authentication are outside the first slice.
 
 ## 8. Testing strategy
 

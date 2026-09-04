@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 from pydantic import BaseModel
-from .models import AgentState, CheckpointState, SkillProfile, SkillVersion, TraceEvent, WorkspaceSnapshot
+from .models import AgentState, CheckpointState, ModelConfig, SkillProfile, SkillVersion, TraceEvent, WorkspaceSnapshot
 
 class ModelRequest(BaseModel):
     messages: list[dict[str, Any]]
@@ -36,6 +36,9 @@ class CompiledPrompt(BaseModel):
 
 class ModelProvider(Protocol):
     def complete(self, request: ModelRequest) -> ModelResponse: ...
+
+class ModelConfigResolver(Protocol):
+    def resolve(self, model_id: str | None = None) -> ModelConfig: ...
 
 class SkillLoader(Protocol):
     def load(self, name: str, version: str | None = None) -> SkillVersion: ...

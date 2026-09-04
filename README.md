@@ -39,7 +39,7 @@ agentcorp/
 ├── ARCHITECTURE.md  CONTRIBUTING.md  pyproject.toml  README.md
 ```
 
-의존성 방향은 `Mission → ExecutionManifest → MissionOrchestrator → AgentRuntime → ModelProvider / PromptCompiler / ToolExecutor / TraceRecorder / CheckpointManager → WorkspaceSnapshotManager`입니다. Domain은 FastAPI, SQLAlchemy, vendor SDK에 의존하지 않습니다.
+의존성 방향은 `Mission → ModelConfigRegistry → ModelConfig → ProviderFactory → ModelProvider`와 `Mission → ExecutionManifest → MissionOrchestrator → AgentRuntime → PromptCompiler / ToolExecutor → TraceRecorder → CheckpointManager → WorkspaceSnapshotManager`입니다. Domain은 FastAPI, SQLAlchemy, vendor SDK에 의존하지 않습니다.
 
 ## Skill 시스템
 
@@ -78,11 +78,11 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-현재 실제 endpoint는 `GET /health`입니다. `/models`, `/missions`, `/runs`는 다음 단계 API 표면으로 정의되어 있습니다.
+현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회를 제공합니다. run 생성 body에 선택적 `model_id`를 전달할 수 있으며 생략하면 설정된 default model을 사용합니다.
 
 ## 테스트
 
-현재 테스트는 health endpoint, ExecutionManifest와 SkillVersion snapshot, TraceEvent ordering, FakeModelProvider를 검증합니다. 나머지 skill/path traversal/prompt/checkpoint/handoff 테스트는 아직 없습니다.
+현재 테스트는 health/API lifecycle, model selection 및 safe snapshot, ExecutionManifest와 SkillVersion snapshot, TraceEvent ordering, FakeModelProvider, skill/path traversal/prompt/checkpoint/handoff 계약을 검증합니다.
 
 ## 개발 로드맵
 
@@ -120,3 +120,7 @@ API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 �
 Provider-neutral JSON Schema를 사용하는 `ModelConfig → ProviderFactory → LMStudioProvider → AgentRuntime` 경로를 Qwen3 8B GGUF / llama.cpp와 실제 LM Studio에서 검증했습니다. PMToDeveloperHandoff의 JSON parse 및 Pydantic validation까지 통과했습니다.
 
 Qwen3.8 27B MLX는 structured-output 요청에서 reasoning-only 응답과 빈 `message.content`를 반환하는 compatibility limitation이 확인되었습니다. AgentCorp에서는 reasoning fallback이나 JSON repair workaround를 추가하지 않고, 해당 모델/runtime 조합의 별도 호환성 문제로 취급합니다.
+
+## PHASE 4 Step 5 model selection
+
+`POST /missions/{id}/runs`는 선택적인 `{ "model_id": "..." }`를 받아 `ModelConfigRegistry → ProviderFactory → ModelProvider`를 통해 provider를 한 번 선택합니다. 모델 설정은 `ModelConfig`로 관리하고, 실행 시작 시 `ModelExecutionSnapshot`을 `ExecutionManifest`에 고정합니다. snapshot에는 model/provider identity, 안전한 endpoint identity, timeout만 저장하며 credential reference와 secret 값은 저장하지 않습니다. 따라서 해당 run의 PM·Developer·QA는 동일한 provider snapshot을 사용하고, 이후 registry 설정 변경은 과거 run 기록을 바꾸지 않습니다.
