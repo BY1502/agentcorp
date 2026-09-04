@@ -16,4 +16,5 @@ class DeterministicPromptCompiler:
     def compile(self, context: dict, profile: SkillProfile):
         skills = self.loader.snapshot(list(profile.skills))
         instructions = "\n\n".join(s.content for s in skills)
+        if context.get("expected_output"): instructions += "\n\nReturn only valid JSON matching the required schema: " + context["expected_output"]
         return {"messages": [{"role": "system", "content": instructions}, {"role": "user", "content": str(context)}], "skill_checksums": tuple(s.checksum for s in skills)}

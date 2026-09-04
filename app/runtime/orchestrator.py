@@ -17,7 +17,9 @@ class BasicMissionOrchestrator:
         run_id=uuid4(); workspace_root.mkdir(parents=True,exist_ok=True); workspace=workspace_root/str(run_id); copytree(fixture,workspace); seq=1
         self.recorder.record(TraceEvent(mission_id=mission_id,mission_run_id=run_id,sequence=seq,event_type="mission_started")); checkpoints=[]; tools=self.tools_factory(workspace); dev_ids=[]; qa_ids=[]; retry=0
         def execute(role, skills, handoff):
-            aid=uuid4(); state=AgentState(mission_id=mission_id,mission_run_id=run_id,agent_run_id=aid,role=role,level=Level.SENIOR,profile=SkillProfile(name=role.value,skills=skills),handoffs=handoff)
+            permissions={Role.PM:(),Role.DEVELOPER:("list_files","read_file","search_code","edit_file","run_test"),Role.QA:("run_test",)}
+            expected={Role.PM:"PMToDeveloperHandoff",Role.DEVELOPER:"DeveloperToQAHandoff",Role.QA:"QAResult"}
+            aid=uuid4(); state=AgentState(mission_id=mission_id,mission_run_id=run_id,agent_run_id=aid,role=role,level=Level.SENIOR,profile=SkillProfile(name=role.value,skills=skills),handoffs=handoff,allowed_tools=permissions[role],expected_output=expected[role])
             def checkpoint(s):
                 if self.snapshot_manager and self.checkpoint_manager:
                     snap=self.snapshot_manager.create(workspace); checkpoints.append(self.checkpoint_manager.create(CheckpointState(mission_run_id=run_id,current_agent_run_id=aid,current_step=s.step,agent_state=s,workspace_snapshot_id=snap.id)))

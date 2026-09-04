@@ -10,7 +10,8 @@ class ModelRequest(BaseModel):
     role: str = ""
     expected_output: str = ""
     metadata: dict[str, Any] = {}
-    response_schema: str | None = None
+    # Provider-neutral JSON Schema. Provider adapters decide how to transport it.
+    response_schema: dict[str, Any] | None = None
 
 class ToolCall(BaseModel):
     name: str

@@ -87,7 +87,7 @@ uvicorn app.main:app --reload
 ## 개발 로드맵
 
 - **v0.1 진행 중**: 핵심 계약, skill snapshot, trace foundation, FakeModelProvider, FastAPI foundation
-- **v0.2 예정**: local model adapter와 coding mission
+- **v0.2 예정**: coding mission과 local adapter 안정화
 - **v0.3 예정**: Blackbox viewer와 checkpoint replay
 - **v0.4 예정**: AI interview / model audition
 - **v0.5 예정**: employee evaluation / skill benchmarking
@@ -113,4 +113,10 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 제공합니다. 현재 저장소는 in-memory이고 FakeModelProvider만 사용합니다. 실제 LLM adapter, frontend, Blackbox UI, arbitrary fork/replay UI, interview, HR/promotion, distributed execution은 아직 없습니다.
+API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 제공합니다. 현재 저장소는 in-memory이며 FakeModelProvider와 LMStudioProvider를 제공합니다. 실제 기본 mission 실행, frontend, Blackbox UI, arbitrary fork/replay UI, interview, HR/promotion, distributed execution은 아직 없습니다.
+
+## PHASE 4 Step 4 검증
+
+Provider-neutral JSON Schema를 사용하는 `ModelConfig → ProviderFactory → LMStudioProvider → AgentRuntime` 경로를 Qwen3 8B GGUF / llama.cpp와 실제 LM Studio에서 검증했습니다. PMToDeveloperHandoff의 JSON parse 및 Pydantic validation까지 통과했습니다.
+
+Qwen3.8 27B MLX는 structured-output 요청에서 reasoning-only 응답과 빈 `message.content`를 반환하는 compatibility limitation이 확인되었습니다. AgentCorp에서는 reasoning fallback이나 JSON repair workaround를 추가하지 않고, 해당 모델/runtime 조합의 별도 호환성 문제로 취급합니다.
