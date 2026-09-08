@@ -51,6 +51,7 @@ def test_lmstudio_provider_maps_provider_neutral_schema(monkeypatch):
     result = LMStudioProvider('qwen/test').complete(
         ModelRequest(
             messages=[{'role': 'user', 'content': 'return JSON'}],
+            tools=[{'name': 'run_test'}],
             expected_output='QAResult',
             response_schema=schema,
         )
@@ -66,6 +67,30 @@ def test_lmstudio_provider_maps_provider_neutral_schema(monkeypatch):
             'schema': schema,
         },
     }
+    assert captured['payload']['tools'] == [{
+        'type': 'function',
+        'function': {
+            'name': 'run_test',
+            'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': True},
+        },
+    }]
+
+def test_lmstudio_provider_uses_chat_completions_for_tool_only_requests(monkeypatch):
+    captured = {}
+
+    def opener(request, **kwargs):
+        captured['url'] = request.full_url
+        captured['payload'] = json.loads(request.data)
+        return Response({'choices': [{'message': {'content': '{"status":"passed"}'}}]})
+
+    monkeypatch.setattr('app.models.lmstudio.urlopen', opener)
+    LMStudioProvider('qwen/test').complete(
+        ModelRequest(messages=[{'role': 'user', 'content': 'inspect'}], tools=[{'name': 'list_files'}])
+    )
+
+    assert captured['url'].endswith('/v1/chat/completions')
+    assert captured['payload']['tools'][0]['function']['name'] == 'list_files'
+    assert 'response_format' not in captured['payload']
 
 def test_lmstudio_provider_accepts_empty_tool_calls(monkeypatch):
     monkeypatch.setattr(

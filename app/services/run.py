@@ -2,6 +2,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.config import settings
+from app.checkpoints.local import InMemoryCheckpointManager, LocalWorkspaceSnapshotManager
 from app.domain.models import (
     ExecutionManifest,
     Level,
@@ -90,6 +91,8 @@ class RunService:
         provider = self.provider_factory.create(resolved_config)
         loader = FilesystemSkillLoader(self.skills_root)
         recorder = InMemoryTraceRecorder()
+        snapshot_manager = LocalWorkspaceSnapshotManager(self.workspace_root)
+        checkpoint_manager = InMemoryCheckpointManager(snapshot_manager)
         manifest = ExecutionManifest(
             mission_id=mission.id,
             mission_version=mission.version,
@@ -106,7 +109,20 @@ class RunService:
             DeterministicPromptCompiler(loader),
             WorkspaceTools,
             recorder,
-        ).run(mission.id, manifest, Path(mission.fixture), self.workspace_root)
+            snapshot_manager,
+            checkpoint_manager,
+        ).run(
+            mission.id,
+            manifest,
+            Path(mission.fixture),
+            self.workspace_root,
+            mission_context={
+                "task": mission.title,
+                "fixture": mission.fixture,
+                "workspace_rule": "The fixture is already the current workspace. Tool paths must be relative to its root; do not prefix them with the fixture path.",
+                "completion_rule": "Developer must inspect the file, apply the requested edit with edit_file, and run tests before reporting completion. QA must run_test on the workspace tests before passing.",
+            },
+        )
         store.runs[result.mission_run_id] = result
         store.events[result.mission_run_id] = recorder.for_run(result.mission_run_id)
         return result

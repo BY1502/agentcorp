@@ -218,3 +218,21 @@ def test_provider_factory_routes_registered_provider_type_without_network():
 
     assert isinstance(provider, FakeModelProvider)
     assert received[0].model_id == "local-qwen"
+
+
+def test_run_service_enables_safe_checkpoints_for_selected_model(tmp_path):
+    registry = ModelConfigRegistry(
+        (ModelConfig(model_id="selected", provider_type="fake", model_name="fake"),),
+        default_model_id="selected",
+    )
+    service = RunService(
+        registry=registry,
+        provider_factory=ProviderFactory(fake_responses=default_fake_responses()),
+        workspace_root=tmp_path / "workspaces",
+        skills_root=Path(__file__).parents[1] / "skills",
+    )
+
+    result = service.start(MissionRecord("Fix auth expiry in app/auth.py", "missions/demo_auth_bug/repo"), "selected")
+
+    assert result.status == "PASSED"
+    assert result.checkpoint_ids

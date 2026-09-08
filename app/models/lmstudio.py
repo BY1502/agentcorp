@@ -14,8 +14,23 @@ class LMStudioProvider:
         if request.response_schema:
             payload={'model':self.model,'messages':request.messages,'response_format':{'type':'json_schema','json_schema':{'name':request.expected_output or 'agentcorp_response','strict':True,'schema':request.response_schema}},'stream':False}
             endpoint=self.base_url+'/v1/chat/completions'
+        elif request.tools:
+            payload={'model':self.model,'messages':request.messages,'stream':False}
+            endpoint=self.base_url+'/v1/chat/completions'
         else:
             payload={'model':self.model,'system_prompt':system,'input':user}; endpoint=self.base_url+'/api/v1/chat'
+        if request.tools and endpoint.endswith('/v1/chat/completions'):
+            payload['tools'] = [
+                {
+                    'type': 'function',
+                    'function': {
+                        'name': tool['name'],
+                        'parameters': tool.get('parameters', {'type': 'object', 'properties': {}, 'additionalProperties': True}),
+                    },
+                }
+                for tool in request.tools
+                if tool.get('name')
+            ]
         req=Request(endpoint,data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'})
         try: raw=urlopen(req,timeout=self.timeout).read()
         except HTTPError as e: raise ProviderError('http_error',f'LM Studio returned HTTP {e.code}',status_code=e.code,latency_ms=round((time.perf_counter() - started) * 1000, 2)) from e

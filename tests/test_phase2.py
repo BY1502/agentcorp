@@ -145,3 +145,17 @@ def test_execution_manifest_keeps_skill_snapshot(tmp_path):
     skill.write_text('changed instruction'); fresh=__import__('app.skills.filesystem',fromlist=['FilesystemSkillLoader']).FilesystemSkillLoader(tmp_path).load('SKILL.md')
     assert manifest.skill_versions[0].content==original and manifest.skill_versions[0].checksum!=fresh.checksum
     assert 'api_key' not in str(manifest.model_dump()) and 'credential' not in str(manifest.model_dump()).lower()
+
+def test_orchestrator_turns_provider_error_into_failed_run(tmp_path):
+    from pathlib import Path
+    from app.models.lmstudio import ProviderError
+    from app.runtime.orchestrator import BasicMissionOrchestrator
+    from app.tools.filesystem import WorkspaceTools
+    from app.skills.filesystem import FilesystemSkillLoader, DeterministicPromptCompiler
+    class BrokenProvider:
+        def complete(self, request): raise ProviderError('timeout_error','timeout')
+    loader=FilesystemSkillLoader(Path('skills')); recorder=__import__('app.tracing.recorder',fromlist=['InMemoryTraceRecorder']).InMemoryTraceRecorder(); mid=uuid4()
+    man=ExecutionManifest(mission_id=mid,mission_version='1',employee_assignments={},model_references={},role_levels={},skill_versions=loader.snapshot(['common/tool_usage.md']),runtime_config={'max_retries':0},initial_workspace_snapshot_id=uuid4())
+    result=BasicMissionOrchestrator(BrokenProvider(),DeterministicPromptCompiler(loader),WorkspaceTools,recorder).run(mid,man,Path('missions/demo_auth_bug/repo'),tmp_path/'runs')
+    events=recorder.for_run(result.mission_run_id)
+    assert result.status=='FAILED' and events[-1].event_type=='mission_finished' and result.final_qa_result['status']=='failed'
