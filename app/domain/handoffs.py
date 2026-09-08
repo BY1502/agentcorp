@@ -21,3 +21,18 @@ class QAResult(BaseModel):
     passed: int = 0
     failed: int = 0
     issues: list[str] = Field(default_factory=list)
+
+class FailureEvidence(BaseModel):
+    test_command: str
+    test_path: str
+    exit_code: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    failed_tests: list[str] = Field(default_factory=list)
+
+class RecoveryContext(BaseModel):
+    recovery_attempt: int
+    previous_developer_handoff: DeveloperToQAHandoff
+    qa_result: QAResult
+    failure_evidence: list[FailureEvidence] = Field(default_factory=list)
+    failure_summary: str

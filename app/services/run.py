@@ -100,7 +100,7 @@ class RunService:
             model_references={},
             role_levels={role: Level.SENIOR for role in Role},
             skill_versions=loader.snapshot(["common/tool_usage.md"]),
-            runtime_config={"max_retries": 0},
+            runtime_config={"max_retries": 0, "max_recovery_attempts": 1},
             initial_workspace_snapshot_id=uuid4(),
             model_snapshot=ModelExecutionSnapshot.from_config(resolved_config),
         )

@@ -18,7 +18,7 @@ class BasicAgentRuntime:
     def emit(self, typ, agent_id, payload=None): self.seq+=1; self.recorder.record(TraceEvent(mission_id=self.mission_id,mission_run_id=self.run_id,agent_run_id=agent_id,sequence=len(self.recorder.for_run(self.run_id))+1,event_type=typ,payload=payload or {}))
     def run(self, agent_run_id: UUID, state: AgentState) -> AgentState:
         schema_models={"PMToDeveloperHandoff":PMToDeveloperHandoff,"DeveloperToQAHandoff":DeveloperToQAHandoff,"QAResult":QAResult}
-        self.emit("agent_started",agent_run_id)
+        self.emit("agent_started",agent_run_id,{"recovery_attempt":state.recovery_attempt})
         while not state.finished:
             if state.profile is None: raise ValueError("agent skill profile is required")
             request_expected_output = (state.expected_output or "") if not state.allowed_tools else ""
@@ -34,7 +34,7 @@ class BasicAgentRuntime:
             if response.kind=="tool" and response.tool_call:
                 if state.allowed_tools and response.tool_call.name not in state.allowed_tools:
                     self.emit("validation_error",agent_run_id,{"category":"unauthorized_tool","tool":response.tool_call.name}); state.finished=True; return state
-                self.emit("tool_call",agent_run_id,response.tool_call.model_dump()); result=self.tools.execute(response.tool_call); self.emit("tool_result",agent_run_id,result.model_dump()); state.tool_results.append(result.model_dump()); call_id=f"call_{len(state.tool_results)}"; state.messages += [{"role":"assistant","content":"","tool_calls":[{"id":call_id,"type":"function","function":{"name":response.tool_call.name,"arguments":json.dumps(response.tool_call.arguments)}}]},{"role":"tool","tool_call_id":call_id,"content":result.output or result.error or ""}]
+                self.emit("tool_call",agent_run_id,response.tool_call.model_dump()); result=self.tools.execute(response.tool_call); result_record=result.model_dump() | {"tool_name":response.tool_call.name,"arguments":response.tool_call.arguments}; self.emit("tool_result",agent_run_id,result_record); state.tool_results.append(result_record); call_id=f"call_{len(state.tool_results)}"; state.messages += [{"role":"assistant","content":"","tool_calls":[{"id":call_id,"type":"function","function":{"name":response.tool_call.name,"arguments":json.dumps(response.tool_call.arguments)}}]},{"role":"tool","tool_call_id":call_id,"content":result.output or result.error or ""}]
                 if result.success and response.tool_call.name == "edit_file" and self.checkpoint:
                     self.checkpoint(state)
                     self.emit("checkpoint_created",agent_run_id,{"reason":"successful_edit_file"})

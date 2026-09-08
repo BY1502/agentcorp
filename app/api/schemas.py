@@ -14,6 +14,7 @@ class RunResponse(BaseModel):
     mission_id: UUID
     status: str
     retry_count: int
+    recovery_count: int = 0
     changed_files: list[str]
     tool_call_count: int
     event_count: int

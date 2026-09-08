@@ -92,6 +92,7 @@ class AgentState(BaseModel):
     finished: bool = False
     allowed_tools: tuple[str, ...] = ()
     expected_output: str | None = None
+    recovery_attempt: int = 0
 
 class WorkspaceSnapshot(BaseModel):
     id: UUID = Field(default_factory=uuid4)
@@ -137,6 +138,7 @@ class MissionRunResult(BaseModel):
     mission_id: UUID
     status: str
     retry_count: int = 0
+    recovery_count: int = 0
     execution_manifest: ExecutionManifest
     pm_agent_run_id: UUID
     developer_agent_run_ids: list[UUID] = Field(default_factory=list)

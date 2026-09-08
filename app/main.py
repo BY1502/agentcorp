@@ -23,7 +23,7 @@ def get_mission(mission_id: UUID):
     if not m: raise HTTPException(404,'mission not found')
     return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
 def run_response(r):
-    return RunResponse(run_id=r.mission_run_id,mission_id=r.mission_id,status=r.status,retry_count=r.retry_count,changed_files=r.changed_files,tool_call_count=r.tool_call_count,event_count=r.event_count,workspace_ref=r.workspace_reference,model_snapshot=r.execution_manifest.model_snapshot)
+    return RunResponse(run_id=r.mission_run_id,mission_id=r.mission_id,status=r.status,retry_count=r.retry_count,recovery_count=r.recovery_count,changed_files=r.changed_files,tool_call_count=r.tool_call_count,event_count=r.event_count,workspace_ref=r.workspace_reference,model_snapshot=r.execution_manifest.model_snapshot)
 @app.post('/missions/{mission_id}/runs', response_model=RunResponse)
 def start_run(mission_id: UUID, request: RunCreate | None = None):
     m=missions.get(mission_id)
