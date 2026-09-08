@@ -121,6 +121,7 @@ class RunService:
                 "fixture": mission.fixture,
                 "workspace_rule": "The fixture is already the current workspace. Tool paths must be relative to its root; do not prefix them with the fixture path.",
                 "completion_rule": "Developer must inspect the file, apply the requested edit with edit_file, and run tests before reporting completion. QA must run_test on the workspace tests before passing.",
+                "recovery_rule": "During recovery, use the exact failed test command and workspace-relative test path from RecoveryContext; do not guess or rewrite the path.",
             },
         )
         store.runs[result.mission_run_id] = result

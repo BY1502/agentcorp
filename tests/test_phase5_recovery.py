@@ -93,6 +93,40 @@ def test_recovery_success_uses_failure_evidence_and_same_workspace(tmp_path):
     assert not any(event.event_type == "recovery_exhausted" for event in events)
 
 
+def test_evidence_pass_and_qa_pass_is_success(tmp_path):
+    responses = [
+        {"output": {"mission_summary": "fix", "developer_task": {"goal": "fix"}}},
+        {"kind": "tool", "name": "edit_file", "arguments": {"path": "app/auth.py", "old_text": "return expiry < current_time", "new_text": "return expiry > current_time"}},
+        {"output": {"status": "completed", "summary": "fixed"}},
+        {"kind": "tool", "name": "run_test", "arguments": {"path": "tests"}},
+        {"output": {"status": "passed", "passed": 2, "failed": 0}},
+    ]
+    result, _, events = run(responses, tmp_path)
+
+    assert result.status == "PASSED"
+    assert result.recovery_count == 0
+    assert not any(event.event_type in {"recovery_started", "validation_error"} for event in events)
+
+
+def test_evidence_fail_and_qa_pass_recovers_from_evidence(tmp_path):
+    responses = [
+        {"output": {"mission_summary": "fix", "developer_task": {"goal": "fix"}}},
+        {"output": {"status": "completed", "summary": "attempted"}},
+        {"kind": "tool", "name": "run_test", "arguments": {"path": "tests"}},
+        {"output": {"status": "passed", "issues": ["misread test output"]}},
+        {"kind": "tool", "name": "edit_file", "arguments": {"path": "app/auth.py", "old_text": "return expiry < current_time", "new_text": "return expiry > current_time"}},
+        {"output": {"status": "completed", "summary": "reworked"}},
+        {"kind": "tool", "name": "run_test", "arguments": {"path": "tests"}},
+        {"output": {"status": "passed", "passed": 2, "failed": 0}},
+    ]
+    result, _, events = run(responses, tmp_path)
+
+    assert result.status == "PASSED"
+    assert result.recovery_count == 1
+    assert any(event.event_type == "recovery_started" for event in events)
+    assert not any(event.event_type == "qa_evidence_conflict" for event in events)
+
+
 def test_recovery_exhaustion_is_bounded(tmp_path):
     responses = [
         {"output": {"mission_summary": "fix", "developer_task": {"goal": "fix"}}},
@@ -224,7 +258,10 @@ def test_qa_failed_without_failed_test_evidence_does_not_recover(tmp_path):
     assert result.status == "FAILED"
     assert result.recovery_count == 0
     assert not any(event.event_type == "recovery_started" for event in events)
-    assert any(event.event_type == "validation_error" for event in events)
+    conflict = next(event for event in events if event.event_type == "validation_error")
+    assert conflict.payload["reason"] == "qa_evidence_conflict"
+    assert conflict.payload["test_exit_code"] == 0
+    assert conflict.payload["qa_status"] == "failed"
 
 
 def test_recovery_keeps_one_frozen_provider_identity(tmp_path):

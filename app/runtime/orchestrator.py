@@ -35,15 +35,34 @@ def _run_test_results(agent_state):
     ]
 
 
+def _latest_run_test_result(agent_state):
+    results = _run_test_results(agent_state)
+    return results[-1] if results else None
+
+
 def validate_qa_test_evidence(agent_state, qa_result):
-    latest = _run_test_results(agent_state)[-1:]
-    result = latest[0] if latest else None
+    result = _latest_run_test_result(agent_state)
     return bool(
         qa_result.status == "passed"
         and result
         and result.get("success") is True
         and result.get("metadata", {}).get("exit_code") == 0
     )
+
+
+def classify_qa_outcome(agent_state, qa_result, tests_unchanged=True):
+    """Return passed, recoverable_failure, evidence_conflict, or validation_failure."""
+    result = _latest_run_test_result(agent_state)
+    if not tests_unchanged:
+        return "validation_failure", []
+    if result and result.get("success") is True and result.get("metadata", {}).get("exit_code") == 0:
+        if qa_result.status == "passed" and validate_qa_test_evidence(agent_state, qa_result):
+            return "passed", []
+        return "evidence_conflict", []
+    evidence = _failure_evidence(agent_state)
+    if evidence:
+        return "recoverable_failure", evidence
+    return "validation_failure", []
 
 
 def _bounded(value: str) -> str:
@@ -94,6 +113,18 @@ def _recovery_budget(runtime_config: dict) -> int:
     if value is None:
         value = runtime_config.get("max_retries", 0)
     return max(0, int(value))
+
+
+def _test_result_metadata(agent_state, qa_result):
+    result = _latest_run_test_result(agent_state) or {}
+    path = str(result.get("arguments", {}).get("path", "tests"))
+    return {
+        "reason": "qa_evidence_conflict",
+        "test_command": f"pytest {path} -q -c /dev/null",
+        "test_path": path,
+        "test_exit_code": result.get("metadata", {}).get("exit_code"),
+        "qa_status": qa_result.status,
+    }
 
 
 class BasicMissionOrchestrator:
@@ -293,29 +324,28 @@ class BasicMissionOrchestrator:
                 return finish("FAILED", QAResult(status="failed", issues=["QA runtime did not produce a result"]))
             qa = QAResult(**qa_state.handoffs)
 
-            if qa.status == "passed":
-                if validate_qa_test_evidence(qa_state, qa) and _test_hashes(workspace) == initial_test_hashes:
-                    return finish("PASSED", qa)
+            decision, evidence = classify_qa_outcome(qa_state, qa, _test_hashes(workspace) == initial_test_hashes)
+            if decision == "passed":
+                return finish("PASSED", qa)
+            if decision == "evidence_conflict":
                 self.recorder.record(
                     TraceEvent(
                         mission_id=mission_id,
                         mission_run_id=run_id,
                         sequence=len(self.recorder.for_run(run_id)) + 1,
                         event_type="validation_error",
-                        payload={"reason": "QA pass lacks valid evidence or tests changed", "recovery_attempt": recovery_attempt},
+                        payload=_test_result_metadata(qa_state, qa),
                     )
                 )
                 return finish("FAILED", qa)
-
-            evidence = _failure_evidence(qa_state)
-            if not evidence:
+            if decision == "validation_failure":
                 self.recorder.record(
                     TraceEvent(
                         mission_id=mission_id,
                         mission_run_id=run_id,
                         sequence=len(self.recorder.for_run(run_id)) + 1,
                         event_type="validation_error",
-                        payload={"reason": "QA failure lacks failed run_test evidence", "recovery_attempt": recovery_attempt},
+                        payload={"reason": "QA result lacks valid evidence or tests changed", "recovery_attempt": recovery_attempt},
                     )
                 )
                 return finish("FAILED", qa)
