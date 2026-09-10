@@ -29,7 +29,7 @@ agentcorp/
 │   ├── tools/                  # Tool contracts, registry, and sandboxed tools
 │   ├── tracing/                # Immutable trace records and recorder interface
 │   ├── checkpoints/            # Serializable checkpoint state and local snapshots
-│   ├── persistence/            # SQLAlchemy models, repositories, and DB setup
+│   ├── persistence/            # repository protocols and SQLite adapter
 │   └── services/               # Small application use cases
 ├── skills/                     # Markdown source of truth for v0.1 skills
 ├── missions/                   # Mission definitions and deterministic fixtures
@@ -108,9 +108,11 @@ Tool paths are resolved beneath the assigned workspace root, then checked with `
 
 ## 6. Persistence strategy
 
-Use SQLAlchemy 2.x mappings behind repositories. SQLite is the default v0.1 backend, with UUIDs serialized in a portable way and JSON payloads for extensible metadata. The initial useful tables are `models`, `employees`, `missions`, `mission_runs`, `agent_runs`, `trace_events`, `checkpoints`, and `fork_runs`; skill versions can be stored as run snapshots plus a small `skill_versions` table. Repository interfaces keep a later PostgreSQL migration local to persistence.
+The application boundary is `Runtime/Service -> repository protocol -> persistent adapter`. v0.1 uses the standard-library SQLite adapter at `AGENTCORP_STORAGE_PATH` (default `data/agentcorp.db`); the in-memory adapter remains available for deterministic unit tests. SQLite is not imported by domain or runtime code.
 
-Trace payloads, manifests, and checkpoint state are JSON-serializable only. No arbitrary Python object, API key, credential value, or hidden reasoning is stored. Model records use a credential reference or runtime-resolved secret. Secrets never appear in trace events, checkpoints, manifests, or model-request event payloads. Trace records are append-only.
+The adapter stores missions, completed run results, append-only trace events, checkpoint state, and workspace-snapshot metadata. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 1. Run finalization writes the result and its events in one short transaction, while checkpoint and workspace metadata are committed at their safe boundaries.
+
+Trace payloads, manifests, and checkpoint state are JSON-serializable only. No arbitrary Python object, API key, credential value, credential reference, raw provider request/response, or hidden reasoning is stored. Model records use a credential reference or runtime-resolved secret only before persistence. Historical run reads use the stored `ExecutionManifest` and `ModelExecutionSnapshot`; they never re-resolve mutable model configuration. Trace records are append-only.
 
 ## 7. v0.1 API surface
 
@@ -146,7 +148,7 @@ These are deliberately postponed because they do not prove the core observabilit
 3. Implement sandboxed tools and append-only in-memory/SQLite trace recording.
 4. Implement explicit agent state, handoff schemas, fake provider, and checkpoint round trips.
 5. Add the deterministic broken repository and synchronous vertical mission run.
-6. Add SQLAlchemy repositories and foundational endpoints.
+6. Add repository protocols, SQLite persistence, and foundational historical-read endpoints.
 7. Add the OpenAI-compatible HTTP adapter with configurable `base_url`, only after the fake flow and tests pass.
 
 ## 11. Approved scope boundary

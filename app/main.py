@@ -6,14 +6,15 @@ from .api.schemas import EventResponse, MissionCreate, MissionResponse, RunCreat
 from .models.registry import DisabledModelError, UnknownModelError
 from .services.mission import MissionService
 from .services.run import RunService
-from .services.store import store
+from .persistence.sqlite import SQLiteStore
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
 
 @app.get("/health")
 def health() -> dict[str, str]: return {"status": "ok"}
 
-missions=MissionService(); runs=RunService()
+storage = SQLiteStore(settings.storage_path)
+missions=MissionService(storage); runs=RunService(storage=storage)
 @app.post('/missions', response_model=MissionResponse)
 def create_mission(request: MissionCreate):
     m=missions.create(request.title,request.fixture); return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)

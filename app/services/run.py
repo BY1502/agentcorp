@@ -80,19 +80,21 @@ class RunService:
         provider_factory: ProviderFactory | None = None,
         workspace_root: Path | None = None,
         skills_root: Path | None = None,
+        storage=None,
     ):
         self.registry = registry or default_model_registry()
         self.provider_factory = provider_factory or default_provider_factory()
         self.workspace_root = workspace_root or Path(settings.workspaces_dir)
         self.skills_root = skills_root or Path(settings.skills_dir)
+        self.storage = storage or store
 
     def start(self, mission, model_id: str | None = None):
         resolved_config = self.registry.resolve(model_id)
         provider = self.provider_factory.create(resolved_config)
         loader = FilesystemSkillLoader(self.skills_root)
         recorder = InMemoryTraceRecorder()
-        snapshot_manager = LocalWorkspaceSnapshotManager(self.workspace_root)
-        checkpoint_manager = InMemoryCheckpointManager(snapshot_manager)
+        snapshot_manager = LocalWorkspaceSnapshotManager(self.workspace_root, self.storage)
+        checkpoint_manager = InMemoryCheckpointManager(snapshot_manager, self.storage)
         manifest = ExecutionManifest(
             mission_id=mission.id,
             mission_version=mission.version,
@@ -124,12 +126,15 @@ class RunService:
                 "recovery_rule": "During recovery, use the exact failed test command and workspace-relative test path from RecoveryContext; do not guess or rewrite the path.",
             },
         )
-        store.runs[result.mission_run_id] = result
-        store.events[result.mission_run_id] = recorder.for_run(result.mission_run_id)
+        events = recorder.for_run(result.mission_run_id)
+        self.storage.finalize_run(result, events)
         return result
 
     def get(self, run_id):
-        return store.runs.get(run_id)
+        return self.storage.get_run(run_id)
 
     def events_for(self, run_id):
-        return store.events.get(run_id)
+        return self.storage.list_events(run_id)
+
+    def checkpoint(self, checkpoint_id):
+        return self.storage.get_checkpoint(checkpoint_id)

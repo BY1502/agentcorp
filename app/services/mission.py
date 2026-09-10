@@ -1,5 +1,14 @@
-from .store import store, MissionRecord
+from .store import MissionRecord, store
+
+
 class MissionService:
+    def __init__(self, repository=None):
+        self.repository = repository or store
+
     def create(self, title, fixture):
-        m=MissionRecord(title,fixture); store.missions[m.id]=m; return m
-    def get(self, mission_id): return store.missions.get(mission_id)
+        mission = MissionRecord(title, fixture)
+        self.repository.save_mission(mission)
+        return mission
+
+    def get(self, mission_id):
+        return self.repository.get_mission(mission_id)

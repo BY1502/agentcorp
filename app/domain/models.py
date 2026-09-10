@@ -8,6 +8,14 @@ from pydantic import field_validator
 
 def now() -> datetime: return datetime.now(timezone.utc)
 
+
+class MissionRecord:
+    def __init__(self, title: str, fixture: str, id: UUID | None = None, version: str = "1"):
+        self.id = id or uuid4()
+        self.title = title
+        self.fixture = fixture
+        self.version = version
+
 class ModelConfig(BaseModel):
     model_id: str
     provider_type: str

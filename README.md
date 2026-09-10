@@ -30,7 +30,7 @@ QA가 실패하면 설정된 최대 retry 횟수까지 Developer가 재실행됩
 
 ## 시스템 아키텍처
 
-`domain`은 외부 프레임워크 독립 모델과 계약, `runtime`은 두 상태 머신, `models`는 ModelProvider, `skills`는 Markdown snapshot과 PromptCompiler, `tools`는 workspace 도구, `tracing`은 trace, `checkpoints`는 복원 상태, `persistence`는 향후 저장소, `api`는 FastAPI를 담당합니다.
+`domain`은 외부 프레임워크 독립 모델과 계약, `runtime`은 두 상태 머신, `models`는 ModelProvider, `skills`는 Markdown snapshot과 PromptCompiler, `tools`는 workspace 도구, `tracing`은 trace, `checkpoints`는 복원 상태, `persistence`는 SQLite adapter, `api`는 FastAPI를 담당합니다.
 
 ```text
 agentcorp/
@@ -39,7 +39,7 @@ agentcorp/
 ├── ARCHITECTURE.md  CONTRIBUTING.md  pyproject.toml  README.md
 ```
 
-의존성 방향은 `Mission → ModelConfigRegistry → ModelConfig → ProviderFactory → ModelProvider`와 `Mission → ExecutionManifest → MissionOrchestrator → AgentRuntime → PromptCompiler / ToolExecutor → TraceRecorder → CheckpointManager → WorkspaceSnapshotManager`입니다. Domain은 FastAPI, SQLAlchemy, vendor SDK에 의존하지 않습니다.
+의존성 방향은 `Mission → ModelConfigRegistry → ModelConfig → ProviderFactory → ModelProvider`와 `Mission → ExecutionManifest → MissionOrchestrator → AgentRuntime → PromptCompiler / ToolExecutor → TraceRecorder → CheckpointManager → WorkspaceSnapshotManager`입니다. 완료된 실행은 `Service → Repository Protocol → SQLiteStore`로 저장되며, Domain은 FastAPI, SQLite, SQLAlchemy, vendor SDK에 의존하지 않습니다.
 
 ## Skill 시스템
 
@@ -113,7 +113,7 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 제공합니다. 현재 저장소는 in-memory이며 FakeModelProvider와 LMStudioProvider를 제공합니다. 실제 기본 mission 실행, frontend, Blackbox UI, arbitrary fork/replay UI, interview, HR/promotion, distributed execution은 아직 없습니다.
+API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 제공합니다. 기본 저장소는 `AGENTCORP_STORAGE_PATH`(기본 `data/agentcorp.db`)의 SQLite이며, 서비스 단위 테스트는 in-memory adapter를 사용할 수 있습니다. 실제 기본 mission 실행, frontend, Blackbox UI, arbitrary fork/replay UI, interview, HR/promotion, distributed execution은 아직 없습니다.
 
 ## PHASE 4 Step 4 검증
 
