@@ -7,6 +7,8 @@ from .models.registry import DisabledModelError, UnknownModelError
 from .services.mission import MissionService
 from .services.run import RunService
 from .persistence.sqlite import SQLiteStore
+from .services.replay import ReplayService, RunNotFoundError
+from .domain.replay import ReplayInspection
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
 
@@ -45,3 +47,10 @@ def get_run(run_id: UUID):
 def get_events(run_id: UUID):
     if not runs.get(run_id): raise HTTPException(404,'run not found')
     return [EventResponse(sequence=e.sequence,event_type=e.event_type,mission_run_id=e.mission_run_id,agent_run_id=e.agent_run_id,timestamp=e.timestamp,payload=e.payload) for e in sorted(runs.events_for(run_id),key=lambda x:x.sequence)]
+
+@app.get('/runs/{run_id}/replay', response_model=ReplayInspection)
+def inspect_run(run_id: UUID):
+    try:
+        return ReplayService(runs.storage).inspect(run_id)
+    except RunNotFoundError as error:
+        raise HTTPException(404, 'run not found') from error

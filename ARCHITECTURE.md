@@ -114,13 +114,15 @@ The adapter stores missions, completed run results, append-only trace events, ch
 
 Trace payloads, manifests, and checkpoint state are JSON-serializable only. No arbitrary Python object, API key, credential value, credential reference, raw provider request/response, or hidden reasoning is stored. Model records use a credential reference or runtime-resolved secret only before persistence. Historical run reads use the stored `ExecutionManifest` and `ModelExecutionSnapshot`; they never re-resolve mutable model configuration. Trace records are append-only.
 
+Historical replay is a read-only inspection of persisted Run, Manifest, Events, Checkpoints, and WorkspaceSnapshots. `ReplayService` reconstructs a sequence-based timeline and safe summaries without creating a provider, calling a model, executing tools, restoring or mutating a workspace, or appending events/checkpoints. Replay is not Resume: Resume continues execution from a checkpoint and is deferred to PHASE 6 Step 3.
+
 ## 7. v0.1 API surface
 
 - `GET /health`
 - `POST /models`, `GET /models`
 - `POST /missions`, `GET /missions/{id}`
 - `POST /missions/{id}/runs`
-- `GET /runs/{id}`, `GET /runs/{id}/events`
+- `GET /runs/{id}`, `GET /runs/{id}/events`, `GET /runs/{id}/replay`
 
 `POST /missions/{id}/runs` accepts an optional JSON body `{ "model_id": "..." }`. When omitted, the configured default model is selected. Unknown models return 404 and disabled models return 409; neither path silently falls back. The response exposes only the safe immutable model snapshot. Handlers remain thin and call services. Run creation initially executes synchronously to keep behavior easy to observe; background execution, streaming, and authentication are outside the first slice.
 

@@ -115,6 +115,8 @@ uvicorn app.main:app --reload
 
 API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 제공합니다. 기본 저장소는 `AGENTCORP_STORAGE_PATH`(기본 `data/agentcorp.db`)의 SQLite이며, 서비스 단위 테스트는 in-memory adapter를 사용할 수 있습니다. 실제 기본 mission 실행, frontend, Blackbox UI, arbitrary fork/replay UI, interview, HR/promotion, distributed execution은 아직 없습니다.
 
+`GET /runs/{id}/replay`는 저장된 Run/Manifest/Event/Checkpoint/WorkspaceSnapshot을 읽어 historical timeline을 구성하는 read-only inspection입니다. ModelConfig 재해석, provider/model/tool 호출, workspace 변경, event/checkpoint 추가는 하지 않으며 Replay와 Resume는 구분됩니다.
+
 ## PHASE 4 Step 4 검증
 
 Provider-neutral JSON Schema를 사용하는 `ModelConfig → ProviderFactory → LMStudioProvider → AgentRuntime` 경로를 Qwen3 8B GGUF / llama.cpp와 실제 LM Studio에서 검증했습니다. PMToDeveloperHandoff의 JSON parse 및 Pydantic validation까지 통과했습니다.
