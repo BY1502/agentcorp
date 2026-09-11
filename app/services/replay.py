@@ -4,6 +4,7 @@ from uuid import UUID
 
 from app.domain.models import ExecutionManifest, TraceEvent
 from app.domain.replay import (
+    ApprovalInspection,
     CheckpointInspection,
     ReplayInspection,
     ReplayIntegrity,
@@ -216,11 +217,13 @@ class ReplayService:
         checkpoints, checkpoint_order_valid = _checkpoints(result, events, self.storage, issues)
         final_events = [event for event in events if event.event_type == "mission_finished"]
         final_event = final_events[-1] if final_events else None
-        if final_event is None:
+        if final_event is None and result.status != "WAITING_APPROVAL":
             issues.append("mission_finished_missing")
-        if events and events[-1].event_type != "mission_finished":
+        if events and events[-1].event_type != "mission_finished" and result.status != "WAITING_APPROVAL":
             issues.append("mission_finished_not_last")
-        status_consistent = bool(final_event and final_event.payload.get("status") == result.status)
+        status_consistent = (
+            result.status == "WAITING_APPROVAL" and final_event is None
+        ) or bool(final_event and final_event.payload.get("status") == result.status)
         if final_event and not status_consistent:
             issues.append("mission_status_mismatch")
 
@@ -252,6 +255,23 @@ class ReplayService:
             if item.tool_name == "run_test"
         ]
         manifest = ExecutionManifest.model_validate(_safe(result.execution_manifest.model_dump(mode="json")))
+        try:
+            approvals = [
+                ApprovalInspection(
+                    approval_id=approval.approval_id,
+                    run_id=approval.run_id,
+                    agent_role=approval.agent_role.value,
+                    tool_name=approval.tool_call.tool_name,
+                    arguments_digest=approval.tool_call.arguments_digest,
+                    policy_id=approval.policy_id,
+                    reason=approval.reason,
+                    status=approval.status,
+                )
+                for approval in self.storage.list_approvals(run_id)
+            ]
+        except Exception:
+            issues.append("approval_corrupted")
+            approvals = []
         return ReplayInspection(
             run_id=result.mission_run_id,
             mission_id=result.mission_id,
@@ -259,6 +279,7 @@ class ReplayService:
             resumed_from_run_id=result.resumed_from_run_id,
             resumed_from_checkpoint_id=result.resumed_from_checkpoint_id,
             execution_manifest=manifest,
+            approvals=approvals,
             timeline=timeline,
             agent_summary=agent_summary,
             tool_summary=tools,

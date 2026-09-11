@@ -8,6 +8,7 @@ class MissionCreate(BaseModel):
     fixture: str='missions/demo_auth_bug/repo'
 class RunCreate(BaseModel):
     model_id: str | None = None
+    approval_mode: str | None = None
 class ResumeRequest(BaseModel):
     checkpoint_id: UUID
 class MissionResponse(BaseModel): id: UUID; title: str; version: str; fixture: str

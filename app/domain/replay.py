@@ -48,6 +48,17 @@ class ToolInspection(BaseModel):
     exit_code: int | None = None
 
 
+class ApprovalInspection(BaseModel):
+    approval_id: UUID
+    run_id: UUID
+    agent_role: str
+    tool_name: str
+    arguments_digest: str
+    policy_id: str
+    reason: str
+    status: str
+
+
 class ReplayIntegrity(BaseModel):
     event_sequence_valid: bool
     checkpoint_order_valid: bool
@@ -63,6 +74,7 @@ class ReplayInspection(BaseModel):
     resumed_from_run_id: UUID | None = None
     resumed_from_checkpoint_id: UUID | None = None
     execution_manifest: ExecutionManifest
+    approvals: list[ApprovalInspection] = Field(default_factory=list)
     timeline: list[ReplayTimelineItem] = Field(default_factory=list)
     agent_summary: dict[str, dict[str, int]] = Field(default_factory=dict)
     tool_summary: list[ToolInspection] = Field(default_factory=list)

@@ -5,9 +5,10 @@ from uuid import UUID
 from .api.schemas import EventResponse, MissionCreate, MissionResponse, ResumeRequest, RunCreate, RunResponse
 from .models.registry import DisabledModelError, UnknownModelError
 from .services.mission import MissionService
-from .services.run import ResumeError, ResumeNotFoundError, RunService
+from .services.run import ApprovalError, ResumeError, ResumeNotFoundError, RunService
 from .persistence.sqlite import SQLiteStore
 from .services.replay import ReplayService, RunNotFoundError
+from .domain.policy import PendingApproval
 from .domain.replay import ReplayInspection
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
@@ -32,7 +33,7 @@ def start_run(mission_id: UUID, request: RunCreate | None = None):
     m=missions.get(mission_id)
     if not m: raise HTTPException(404,'mission not found')
     try:
-        result = runs.start(m, request.model_id if request else None)
+        result = runs.start(m, request.model_id if request else None, request.approval_mode if request else None)
     except UnknownModelError as error:
         raise HTTPException(404, str(error)) from error
     except DisabledModelError as error:
@@ -47,6 +48,23 @@ def get_run(run_id: UUID):
 def get_events(run_id: UUID):
     if not runs.get(run_id): raise HTTPException(404,'run not found')
     return [EventResponse(sequence=e.sequence,event_type=e.event_type,mission_run_id=e.mission_run_id,agent_run_id=e.agent_run_id,timestamp=e.timestamp,payload=e.payload) for e in sorted(runs.events_for(run_id),key=lambda x:x.sequence)]
+
+@app.get('/runs/{run_id}/approvals', response_model=list[PendingApproval])
+def get_approvals(run_id: UUID):
+    if not runs.get(run_id): raise HTTPException(404,'run not found')
+    try:
+        return runs.approvals_for(run_id)
+    except ApprovalError as error:
+        raise HTTPException(409, str(error)) from error
+
+@app.get('/approvals/{approval_id}', response_model=PendingApproval)
+def get_approval(approval_id: UUID):
+    try:
+        approval = runs.approval(approval_id)
+    except ApprovalError as error:
+        raise HTTPException(409, str(error)) from error
+    if not approval: raise HTTPException(404,'approval not found')
+    return approval
 
 @app.post('/runs/{run_id}/resume', response_model=RunResponse)
 def resume_run(run_id: UUID, request: ResumeRequest):

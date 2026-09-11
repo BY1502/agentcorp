@@ -101,6 +101,9 @@ class AgentState(BaseModel):
     allowed_tools: tuple[str, ...] = ()
     expected_output: str | None = None
     recovery_attempt: int = 0
+    waiting_approval: bool = False
+    pending_approval_id: UUID | None = None
+    pending_tool_call: dict[str, Any] | None = None
 
 class WorkspaceSnapshot(BaseModel):
     id: UUID = Field(default_factory=uuid4)
@@ -117,6 +120,11 @@ class CheckpointState(BaseModel):
     skill_versions: tuple[SkillVersion, ...] = ()
     workspace_snapshot_id: UUID
 
+class PolicyExecutionSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    mode: str = "disabled"
+    policy_version: str = "1"
+
 class ExecutionManifest(BaseModel):
     model_config = ConfigDict(frozen=True)
     mission_id: UUID
@@ -128,6 +136,7 @@ class ExecutionManifest(BaseModel):
     runtime_config: dict[str, Any]
     initial_workspace_snapshot_id: UUID
     model_snapshot: ModelExecutionSnapshot | None = None
+    policy_snapshot: PolicyExecutionSnapshot | None = None
 
 class TraceEvent(BaseModel):
     model_config = ConfigDict(frozen=True)

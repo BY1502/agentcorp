@@ -39,7 +39,7 @@ agentcorp/
 ├── ARCHITECTURE.md  CONTRIBUTING.md  pyproject.toml  README.md
 ```
 
-의존성 방향은 `Mission → ModelConfigRegistry → ModelConfig → ProviderFactory → ModelProvider`와 `Mission → ExecutionManifest → MissionOrchestrator → AgentRuntime → PromptCompiler / ToolExecutor → TraceRecorder → CheckpointManager → WorkspaceSnapshotManager`입니다. 완료된 실행은 `Service → Repository Protocol → SQLiteStore`로 저장되며, Domain은 FastAPI, SQLite, SQLAlchemy, vendor SDK에 의존하지 않습니다.
+의존성 방향은 `Mission → ExecutionManifest → MissionOrchestrator → AgentRuntime → ModelProvider / PromptCompiler / ToolExecutor → TraceRecorder → CheckpointManager → WorkspaceSnapshotManager`입니다. 도구 권한 검증 뒤 `PolicyEvaluator`가 ALLOW / DENY / REQUIRE_APPROVAL을 결정하고, pending approval은 `ApprovalStore`에 저장됩니다. 완료된 실행은 `Service → Repository Protocol → SQLiteStore`로 저장되며, Domain은 FastAPI, SQLite, SQLAlchemy, vendor SDK에 의존하지 않습니다.
 
 ## Skill 시스템
 
@@ -58,6 +58,8 @@ Model은 intelligence, Role은 직무, Level은 seniority behavior, Skill은 reu
 Checkpoint는 runtime state, handoff state, model assignment, SkillVersion snapshot, WorkspaceSnapshot reference를 복원합니다. WorkspaceSnapshot은 파일시스템 상태를 별도 표현하며 v0.1에서는 복사 디렉터리를 사용할 수 있습니다. 향후 같은 checkpoint에서 다른 model, skill version, level로 ForkRun을 만들 수 있습니다. checkpoint는 모든 trace event마다 만들지 않고 tool result 완료·handoff·ownership 변경 전 같은 안전 경계에서 만듭니다.
 
 `POST /runs/{id}/resume`는 FAILED/EXHAUSTED run의 지원되는 handoff checkpoint에서 새 Run을 만듭니다. PM handoff는 Developer부터, Developer handoff는 QA부터 재개하며 저장된 WorkspaceSnapshot을 새 workspace에 복원합니다. 부모 Run과 workspace는 변경하지 않고 저장된 ExecutionManifest·model snapshot·SkillVersion snapshot을 사용합니다. Replay는 읽기 전용 inspection이고, Resume은 실행이며, Rerun은 처음부터 시작합니다.
+
+`approval_mode=disabled`가 기본값이며 기존 자동 도구 실행을 보존합니다. `policy` 모드에서는 읽기 전용 도구를 자동 허용하고 `edit_file`을 `WAITING_APPROVAL`로 일시정지합니다. Step 1의 approval API는 조회 전용이며 approve/reject와 동일 Run continuation은 다음 단계 범위입니다.
 
 ## v0.1 범위
 
@@ -80,7 +82,7 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·resume를 제공합니다. run 생성 body에 선택적 `model_id`를 전달할 수 있으며 생략하면 설정된 default model을 사용합니다.
+현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·approval 조회·resume를 제공합니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
 
 ## 테스트
 

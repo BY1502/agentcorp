@@ -64,6 +64,9 @@ All identifiers are UUIDs. Domain records use Pydantic models or frozen dataclas
 - **WorkspaceSnapshot**: independent filesystem state representation. In v0.1 it may be a copied directory. `WorkspaceSnapshotManager` owns creation and restoration.
 - **Checkpoint**: restorable record combining checkpoint metadata, CheckpointState, and its WorkspaceSnapshot reference.
 - **ForkRun**: a new MissionRun derived from a checkpoint, recording replacement model, level, or skills and its parent checkpoint.
+- **PolicyExecutionSnapshot**: immutable policy mode/version frozen in the ExecutionManifest. It contains no credentials or secrets.
+- **PolicyDecision**: deterministic ALLOW, DENY, or REQUIRE_APPROVAL result for a proposed tool call. Permission checks remain a separate earlier gate.
+- **PendingApproval**: safe, persisted inspection record containing a bounded `ToolCallSnapshot`, argument digest, policy identity, and reason. It is not an approval action.
 
 Persistence may initially omit a standalone `roles`/`levels` table because these are closed v0.1 enums. They remain domain concepts and can become reference data when made configurable.
 
@@ -82,6 +85,8 @@ The following protocols define seams without forcing infrastructure into the dom
 - `ModelConfigRegistry.resolve(model_id?) -> ModelConfig`: resolves the requested model or configured default, rejecting unknown and disabled models without fallback. `ProviderFactory.create(config) -> ModelProvider` builds the selected provider once for the run.
 - `AgentRuntime.run(agent_run, state) -> AgentResult`: executes exactly one AgentRun and emits observable events for prompt compilation, model request/response, tool calls/results, validation, state updates, and finalization.
 - `MissionOrchestrator.run(mission, manifest) -> MissionResult`: invokes AgentRuntime for PM, Developer, and QA, applies bounded retries, creates handoff/ownership-boundary checkpoints, and completes the MissionRun.
+- `PolicyEvaluator.evaluate(role, tool_call) -> PolicyDecision`: provider-free deterministic policy evaluation after tool permission validation.
+- `ApprovalStore.save/get/list`: persists safe pending approvals without executing or approving them.
 
 The application resolves `model_id` to `ModelConfig`, creates one provider through `ProviderFactory`, and freezes the safe model snapshot into `ExecutionManifest` before orchestration. PM, Developer, and QA therefore share the provider selected for that run; the registry is not consulted again during the run. SQLAlchemy repositories, filesystem skill loading, HTTP model adapters, and the fake provider implement the contracts. Dependency direction:
 
@@ -100,6 +105,8 @@ Mission -> ExecutionManifest -> MissionOrchestrator -> AgentRuntime
 
 The runtime is a small state machine, not a framework graph. Every observable execution step emits a trace event, but filesystem checkpoints are not created after every event. Checkpoint policy is explicit and configurable; v0.1 safe boundaries are after completed tool results, after structured handoffs, and before changing ownership between agents.
 
+Permission validation answers whether an agent may request a registered tool; policy evaluation then decides whether that permitted request is automatic, denied, or paused for approval. The default `approval_mode=disabled` preserves automatic tool execution. In `policy` mode, read-only tools are allowed, `edit_file` requires approval, and deterministic rules may deny a tool. A REQUIRE_APPROVAL decision persists a PendingApproval and checkpoint, emits `approval_required`, leaves the run in nonterminal `WAITING_APPROVAL`, and does not execute the tool or emit `mission_finished`. Step 1 exposes read-only approval inspection only; approve/reject continuation is deferred.
+
 `TraceEvent` is an immutable observation. `Checkpoint` is restorable state. They are related by IDs and sequence context, but are not equivalent.
 
 PM output becomes a validated `PMToDeveloperHandoff`; Developer output becomes `DeveloperToQAHandoff`; QA output becomes `QAResult`. Invalid structured output emits `validation_error` and follows an explicit failure policy.
@@ -110,7 +117,7 @@ Tool paths are resolved beneath the assigned workspace root, then checked with `
 
 The application boundary is `Runtime/Service -> repository protocol -> persistent adapter`. v0.1 uses the standard-library SQLite adapter at `AGENTCORP_STORAGE_PATH` (default `data/agentcorp.db`); the in-memory adapter remains available for deterministic unit tests. SQLite is not imported by domain or runtime code.
 
-The adapter stores missions, completed run results, append-only trace events, checkpoint state, and workspace-snapshot metadata. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 1. Run finalization writes the result and its events in one short transaction, while checkpoint and workspace metadata are committed at their safe boundaries.
+The adapter stores missions, run results, append-only trace events, checkpoint state, workspace-snapshot metadata, and pending approvals. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 1. Run finalization writes the result and its events in one short transaction, while checkpoint, workspace, and approval metadata are committed at their safe boundaries.
 
 Trace payloads, manifests, and checkpoint state are JSON-serializable only. No arbitrary Python object, API key, credential value, credential reference, raw provider request/response, or hidden reasoning is stored. Model records use a credential reference or runtime-resolved secret only before persistence. Historical run reads use the stored `ExecutionManifest` and `ModelExecutionSnapshot`; they never re-resolve mutable model configuration. Trace records are append-only.
 
@@ -123,11 +130,14 @@ Historical replay is a read-only inspection of persisted Run, Manifest, Events, 
 - `POST /missions`, `GET /missions/{id}`
 - `POST /missions/{id}/runs`
 - `GET /runs/{id}`, `GET /runs/{id}/events`, `GET /runs/{id}/replay`
+- `GET /runs/{id}/approvals`, `GET /approvals/{id}`
 - `POST /runs/{id}/resume`
 
 `POST /missions/{id}/runs` accepts an optional JSON body `{ "model_id": "..." }`. When omitted, the configured default model is selected. Unknown models return 404 and disabled models return 409; neither path silently falls back. The response exposes only the safe immutable model snapshot. Handlers remain thin and call services. Run creation initially executes synchronously to keep behavior easy to observe; background execution, streaming, and authentication are outside the first slice.
 
 `POST /runs/{id}/resume` accepts a checkpoint ID and only resumes FAILED/EXHAUSTED runs at supported handoff boundaries: PM handoff resumes at Developer and Developer handoff resumes at QA. It reconstructs the provider from the persisted model snapshot and compiles from immutable checkpoint SkillVersion snapshots; it does not consult the mutable model registry or current Markdown files.
+
+`WAITING_APPROVAL` is intentionally not accepted by the generic resume endpoint. Step 1 can inspect its persisted pending approval and replay timeline, while same-run approval continuation is reserved for the next policy step.
 
 ## 8. Testing strategy
 

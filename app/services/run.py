@@ -10,6 +10,7 @@ from app.domain.models import (
     Level,
     ModelConfig,
     ModelExecutionSnapshot,
+    PolicyExecutionSnapshot,
     Role,
 )
 from app.models.factory import ProviderFactory
@@ -28,6 +29,10 @@ class ResumeError(ValueError):
 
 class ResumeNotFoundError(ResumeError):
     status_code = 404
+
+
+class ApprovalError(ValueError):
+    status_code = 409
 
 
 def _workspace_hashes(root: Path) -> dict[str, str]:
@@ -109,17 +114,22 @@ class RunService:
         workspace_root: Path | None = None,
         skills_root: Path | None = None,
         storage=None,
+        approval_mode: str | None = None,
+        policy_rules: dict[str, str] | None = None,
     ):
         self.registry = registry or default_model_registry()
         self.provider_factory = provider_factory or default_provider_factory()
         self.workspace_root = workspace_root or Path(settings.workspaces_dir)
         self.skills_root = skills_root or Path(settings.skills_dir)
         self.storage = storage or store
+        self.approval_mode = approval_mode or getattr(settings, "approval_mode", "disabled")
+        self.policy_rules = policy_rules or {}
 
-    def start(self, mission, model_id: str | None = None):
+    def start(self, mission, model_id: str | None = None, approval_mode: str | None = None):
         resolved_config = self.registry.resolve(model_id)
         provider = self.provider_factory.create(resolved_config)
         loader = FilesystemSkillLoader(self.skills_root)
+        selected_approval_mode = approval_mode or self.approval_mode
         recorder = InMemoryTraceRecorder()
         snapshot_manager = LocalWorkspaceSnapshotManager(self.workspace_root, self.storage)
         checkpoint_manager = InMemoryCheckpointManager(snapshot_manager, self.storage)
@@ -138,9 +148,10 @@ class RunService:
                     "roles/qa/SKILL.md",
                 ]
             ),
-            runtime_config={"max_retries": 0, "max_recovery_attempts": 1},
+            runtime_config={"max_retries": 0, "max_recovery_attempts": 1, "approval_mode": selected_approval_mode, "policy_version": "1", "policy_rules": self.policy_rules},
             initial_workspace_snapshot_id=uuid4(),
             model_snapshot=ModelExecutionSnapshot.from_config(resolved_config),
+            policy_snapshot=PolicyExecutionSnapshot(mode=selected_approval_mode, policy_version="1"),
         )
         result = BasicMissionOrchestrator(
             provider,
@@ -149,6 +160,7 @@ class RunService:
             recorder,
             snapshot_manager,
             checkpoint_manager,
+            self.storage,
         ).run(
             mission.id,
             manifest,
@@ -253,6 +265,7 @@ class RunService:
             recorder,
             snapshot_manager,
             checkpoint_manager,
+            self.storage,
         ).run(
             mission.id,
             parent.execution_manifest,
@@ -278,3 +291,15 @@ class RunService:
 
     def checkpoint(self, checkpoint_id):
         return self.storage.get_checkpoint(checkpoint_id)
+
+    def approvals_for(self, run_id):
+        try:
+            return self.storage.list_approvals(run_id)
+        except Exception as error:
+            raise ApprovalError("approval is corrupted") from error
+
+    def approval(self, approval_id):
+        try:
+            return self.storage.get_approval(approval_id)
+        except Exception as error:
+            raise ApprovalError("approval is corrupted") from error

@@ -3,6 +3,7 @@ from typing import Any, Protocol
 from uuid import UUID
 from pydantic import BaseModel
 from .models import AgentState, CheckpointState, ModelConfig, SkillProfile, SkillVersion, TraceEvent, WorkspaceSnapshot
+from .policy import PendingApproval, PolicyDecision
 
 class ModelRequest(BaseModel):
     messages: list[dict[str, Any]]
@@ -37,6 +38,9 @@ class CompiledPrompt(BaseModel):
 class ModelProvider(Protocol):
     def complete(self, request: ModelRequest) -> ModelResponse: ...
 
+class PolicyEvaluatorContract(Protocol):
+    def evaluate(self, role: str, tool_call: ToolCall) -> PolicyDecision: ...
+
 class ModelConfigResolver(Protocol):
     def resolve(self, model_id: str | None = None) -> ModelConfig: ...
 
@@ -57,6 +61,11 @@ class CheckpointManager(Protocol):
 class WorkspaceSnapshotManager(Protocol):
     def create(self, workspace: Path) -> WorkspaceSnapshot: ...
     def restore(self, snapshot_id: UUID, destination: Path) -> Path: ...
+
+class ApprovalStore(Protocol):
+    def save_approval(self, approval: PendingApproval) -> None: ...
+    def get_approval(self, approval_id: UUID) -> PendingApproval | None: ...
+    def list_approvals(self, run_id: UUID) -> list[PendingApproval]: ...
 
 class AgentRuntime(Protocol):
     def run(self, agent_run_id: UUID, state: AgentState) -> AgentState: ...

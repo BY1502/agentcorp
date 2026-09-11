@@ -11,6 +11,7 @@ class Settings(BaseModel):
     lmstudio_base_url: str = "http://127.0.0.1:1234"
     lmstudio_model: str = "qwen/qwen3.8-27b"
     lmstudio_timeout: float = 120
+    approval_mode: str = "disabled"
 
 settings = Settings(
     default_model_id=os.getenv("AGENTCORP_DEFAULT_MODEL_ID", "fake-default"),
@@ -19,4 +20,5 @@ settings = Settings(
     lmstudio_model=os.getenv("AGENTCORP_LMSTUDIO_MODEL", "qwen/qwen3.8-27b"),
     lmstudio_timeout=float(os.getenv("AGENTCORP_LMSTUDIO_TIMEOUT", "120")),
     storage_path=Path(os.getenv("AGENTCORP_STORAGE_PATH", "data/agentcorp.db")),
+    approval_mode=os.getenv("AGENTCORP_APPROVAL_MODE", "disabled"),
 )

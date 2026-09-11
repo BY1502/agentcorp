@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from app.domain.models import CheckpointState, MissionRecord, MissionRunResult, TraceEvent, WorkspaceSnapshot
+from app.domain.policy import PendingApproval
 from app.tracing.recorder import sanitize
 
 
@@ -98,6 +99,11 @@ class SQLiteStore:
                     mission_run_id TEXT NOT NULL,
                     state_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS approvals (
+                    approval_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    approval_json TEXT NOT NULL
+                );
                 """
             )
 
@@ -148,6 +154,27 @@ class SQLiteStore:
                 "SELECT state_json FROM checkpoints WHERE checkpoint_id = ?", (str(checkpoint_id),)
             ).fetchone()
         return CheckpointState.model_validate(json.loads(row["state_json"])) if row else None
+
+    def save_approval(self, approval: PendingApproval) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO approvals(approval_id, run_id, approval_json) VALUES (?, ?, ?)",
+                (str(approval.approval_id), str(approval.run_id), _json(approval)),
+            )
+
+    def get_approval(self, approval_id: UUID) -> PendingApproval | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT approval_json FROM approvals WHERE approval_id = ?", (str(approval_id),)
+            ).fetchone()
+        return PendingApproval.model_validate(json.loads(row["approval_json"])) if row else None
+
+    def list_approvals(self, run_id: UUID) -> list[PendingApproval]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT approval_json FROM approvals WHERE run_id = ? ORDER BY approval_id", (str(run_id),)
+            ).fetchall()
+        return [PendingApproval.model_validate(json.loads(row["approval_json"])) for row in rows]
 
     def append_events(self, events: list[TraceEvent]) -> None:
         with self._lock, self._connection:

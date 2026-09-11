@@ -20,6 +20,7 @@ from app.domain.models import (
     SkillProfile,
     TraceEvent,
 )
+from app.domain.policy import PendingApproval, PolicyEvaluator
 from app.tracing.recorder import sanitize_text
 from .agent import BasicAgentRuntime
 
@@ -128,13 +129,15 @@ def _test_result_metadata(agent_state, qa_result):
 
 
 class BasicMissionOrchestrator:
-    def __init__(self, provider, compiler, tools_factory, recorder, snapshot_manager=None, checkpoint_manager=None):
+    def __init__(self, provider, compiler, tools_factory, recorder, snapshot_manager=None, checkpoint_manager=None, approval_store=None, policy_evaluator=None):
         self.provider = provider
         self.compiler = compiler
         self.tools_factory = tools_factory
         self.recorder = recorder
         self.snapshot_manager = snapshot_manager
         self.checkpoint_manager = checkpoint_manager
+        self.approval_store = approval_store
+        self.policy_evaluator = policy_evaluator
 
     def run(
         self,
@@ -181,6 +184,19 @@ class BasicMissionOrchestrator:
         qa_ids = []
         recovery_attempt = resume_checkpoint.agent_state.recovery_attempt if resume_checkpoint else 0
         budget = _recovery_budget(manifest.runtime_config)
+        policy_evaluator = self.policy_evaluator or PolicyEvaluator(
+            mode=(manifest.policy_snapshot.mode if manifest.policy_snapshot else manifest.runtime_config.get("approval_mode", "disabled")),
+            policy_version=(manifest.policy_snapshot.policy_version if manifest.policy_snapshot else manifest.runtime_config.get("policy_version", "1")),
+            rules=manifest.runtime_config.get("policy_rules"),
+        )
+
+        def approval_handler(approval: PendingApproval, state: AgentState):
+            if self.approval_store:
+                for existing in self.approval_store.list_approvals(run_id):
+                    if existing.status == "PENDING" and existing.tool_call.tool_name == approval.tool_call.tool_name and existing.tool_call.arguments_digest == approval.tool_call.arguments_digest:
+                        return existing
+                self.approval_store.save_approval(approval)
+            return approval
 
         def execute(role, skills, handoff, attempt=0):
             permissions = {
@@ -208,8 +224,7 @@ class BasicMissionOrchestrator:
             def checkpoint(agent_state):
                 if self.snapshot_manager and self.checkpoint_manager:
                     snapshot = self.snapshot_manager.create(workspace)
-                    checkpoints.append(
-                        self.checkpoint_manager.create(
+                    checkpoint_id = self.checkpoint_manager.create(
                             CheckpointState(
                                 mission_run_id=run_id,
                                 current_agent_run_id=agent_id,
@@ -220,26 +235,29 @@ class BasicMissionOrchestrator:
                                 workspace_snapshot_id=snapshot.id,
                             )
                         )
-                    )
+                    checkpoints.append(checkpoint_id)
+                    return checkpoint_id
+                return None
 
-            return agent_id, BasicAgentRuntime(self.provider, self.compiler, tools, self.recorder, mission_id, run_id, checkpoint).run(agent_id, state)
+            return agent_id, BasicAgentRuntime(self.provider, self.compiler, tools, self.recorder, mission_id, run_id, checkpoint, policy_evaluator, approval_handler).run(agent_id, state)
 
-        def finish(status, final_qa):
+        def finish(status, final_qa, emit_finished=True):
             events = self.recorder.for_run(run_id)
-            self.recorder.record(
-                TraceEvent(
-                    mission_id=mission_id,
-                    mission_run_id=run_id,
-                    sequence=len(events) + 1,
-                    event_type="mission_finished",
-                    payload={"status": status, "recovery_count": recovery_attempt},
+            if emit_finished:
+                self.recorder.record(
+                    TraceEvent(
+                        mission_id=mission_id,
+                        mission_run_id=run_id,
+                        sequence=len(events) + 1,
+                        event_type="mission_finished",
+                        payload={"status": status, "recovery_count": recovery_attempt},
+                    )
                 )
-            )
             events = self.recorder.for_run(run_id)
             changed = [
                 event.payload.get("arguments", {}).get("path")
                 for event in events
-                if event.event_type == "tool_call" and event.payload.get("name") == "edit_file"
+                if event.event_type == "tool_result" and event.payload.get("tool_name") == "edit_file"
             ]
             return MissionRunResult(
                 mission_run_id=run_id,
@@ -265,6 +283,8 @@ class BasicMissionOrchestrator:
         recovery_context = None
         if resume_checkpoint is None:
             pm_id, pm_state = execute(Role.PM, ("common/tool_usage.md", "common/handoff.md", "roles/pm/SKILL.md"), {})
+            if pm_state.waiting_approval:
+                return finish("WAITING_APPROVAL", QAResult(status="pending"), False)
             if not {"mission_summary", "developer_task"} <= pm_state.handoffs.keys():
                 return finish("FAILED", QAResult(status="failed", issues=["PM runtime did not produce a handoff"]))
             pm = PMToDeveloperHandoff(**pm_state.handoffs)
@@ -333,6 +353,8 @@ class BasicMissionOrchestrator:
                     recovery_attempt,
                 )
                 dev_ids.append(dev_id)
+                if dev_state.waiting_approval:
+                    return finish("WAITING_APPROVAL", QAResult(status="pending"), False)
                 if not {"status", "summary"} <= dev_state.handoffs.keys():
                     return finish("FAILED", QAResult(status="failed", issues=["Developer runtime did not produce a handoff"]))
                 dev = DeveloperToQAHandoff(**dev_state.handoffs)
@@ -377,6 +399,8 @@ class BasicMissionOrchestrator:
                 recovery_attempt,
             )
             qa_ids.append(qa_id)
+            if qa_state.waiting_approval:
+                return finish("WAITING_APPROVAL", QAResult(status="pending"), False)
             if "status" not in qa_state.handoffs:
                 return finish("FAILED", QAResult(status="failed", issues=["QA runtime did not produce a result"]))
             qa = QAResult(**qa_state.handoffs)
