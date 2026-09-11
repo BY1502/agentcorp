@@ -11,6 +11,13 @@ class FilesystemSkillLoader:
         return SkillVersion(name=name, version=version or "1.0.0", content=content, checksum=hashlib.sha256(content.encode()).hexdigest())
     def snapshot(self, names: list[str]) -> tuple[SkillVersion, ...]: return tuple(self.load(n) for n in names)
 
+class SnapshotSkillLoader:
+    def __init__(self, versions: tuple[SkillVersion, ...]): self.versions = {skill.name: skill for skill in versions}
+    def load(self, name: str, version: str | None = None) -> SkillVersion:
+        if name not in self.versions: raise ValueError(f"skill snapshot is missing: {name}")
+        return self.versions[name]
+    def snapshot(self, names: list[str]) -> tuple[SkillVersion, ...]: return tuple(self.load(n) for n in names)
+
 class DeterministicPromptCompiler:
     def __init__(self, loader: FilesystemSkillLoader): self.loader = loader
     def compile(self, context: dict, profile: SkillProfile):

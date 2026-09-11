@@ -53,9 +53,11 @@ Model은 intelligence, Role은 직무, Level은 seniority behavior, Skill은 reu
 
 초기 이벤트는 `mission_started`, `agent_started`, `prompt_compiled`, `model_request`, `model_response`, `tool_call`, `tool_result`, `handoff_created`, `checkpoint_created`, `validation_error`, `runtime_error`, `agent_finished`, `mission_finished`입니다. 관찰 가능한 request/response, tool, validation, latency, usage, handoff, error만 저장하며 private chain-of-thought와 secret은 저장하지 않습니다. TraceEvent는 observation이고 Checkpoint는 restorable state입니다.
 
-## Checkpoint / Replay
+## Checkpoint / Replay / Resume
 
 Checkpoint는 runtime state, handoff state, model assignment, SkillVersion snapshot, WorkspaceSnapshot reference를 복원합니다. WorkspaceSnapshot은 파일시스템 상태를 별도 표현하며 v0.1에서는 복사 디렉터리를 사용할 수 있습니다. 향후 같은 checkpoint에서 다른 model, skill version, level로 ForkRun을 만들 수 있습니다. checkpoint는 모든 trace event마다 만들지 않고 tool result 완료·handoff·ownership 변경 전 같은 안전 경계에서 만듭니다.
+
+`POST /runs/{id}/resume`는 FAILED/EXHAUSTED run의 지원되는 handoff checkpoint에서 새 Run을 만듭니다. PM handoff는 Developer부터, Developer handoff는 QA부터 재개하며 저장된 WorkspaceSnapshot을 새 workspace에 복원합니다. 부모 Run과 workspace는 변경하지 않고 저장된 ExecutionManifest·model snapshot·SkillVersion snapshot을 사용합니다. Replay는 읽기 전용 inspection이고, Resume은 실행이며, Rerun은 처음부터 시작합니다.
 
 ## v0.1 범위
 
@@ -78,7 +80,7 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회를 제공합니다. run 생성 body에 선택적 `model_id`를 전달할 수 있으며 생략하면 설정된 default model을 사용합니다.
+현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·resume를 제공합니다. run 생성 body에 선택적 `model_id`를 전달할 수 있으며 생략하면 설정된 default model을 사용합니다.
 
 ## 테스트
 

@@ -157,3 +157,5 @@ class MissionRunResult(BaseModel):
     event_count: int = 0
     workspace_reference: str
     checkpoint_ids: list[UUID] = Field(default_factory=list)
+    resumed_from_run_id: UUID | None = None
+    resumed_from_checkpoint_id: UUID | None = None

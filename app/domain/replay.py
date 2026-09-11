@@ -60,6 +60,8 @@ class ReplayInspection(BaseModel):
     run_id: UUID
     mission_id: UUID
     final_status: str
+    resumed_from_run_id: UUID | None = None
+    resumed_from_checkpoint_id: UUID | None = None
     execution_manifest: ExecutionManifest
     timeline: list[ReplayTimelineItem] = Field(default_factory=list)
     agent_summary: dict[str, dict[str, int]] = Field(default_factory=dict)

@@ -256,6 +256,8 @@ class ReplayService:
             run_id=result.mission_run_id,
             mission_id=result.mission_id,
             final_status=result.status,
+            resumed_from_run_id=result.resumed_from_run_id,
+            resumed_from_checkpoint_id=result.resumed_from_checkpoint_id,
             execution_manifest=manifest,
             timeline=timeline,
             agent_summary=agent_summary,

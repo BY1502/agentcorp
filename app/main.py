@@ -2,10 +2,10 @@ from fastapi import FastAPI
 from .config import settings
 from fastapi import HTTPException
 from uuid import UUID
-from .api.schemas import EventResponse, MissionCreate, MissionResponse, RunCreate, RunResponse
+from .api.schemas import EventResponse, MissionCreate, MissionResponse, ResumeRequest, RunCreate, RunResponse
 from .models.registry import DisabledModelError, UnknownModelError
 from .services.mission import MissionService
-from .services.run import RunService
+from .services.run import ResumeError, ResumeNotFoundError, RunService
 from .persistence.sqlite import SQLiteStore
 from .services.replay import ReplayService, RunNotFoundError
 from .domain.replay import ReplayInspection
@@ -26,7 +26,7 @@ def get_mission(mission_id: UUID):
     if not m: raise HTTPException(404,'mission not found')
     return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
 def run_response(r):
-    return RunResponse(run_id=r.mission_run_id,mission_id=r.mission_id,status=r.status,retry_count=r.retry_count,recovery_count=r.recovery_count,changed_files=r.changed_files,tool_call_count=r.tool_call_count,event_count=r.event_count,workspace_ref=r.workspace_reference,model_snapshot=r.execution_manifest.model_snapshot)
+    return RunResponse(run_id=r.mission_run_id,mission_id=r.mission_id,status=r.status,retry_count=r.retry_count,recovery_count=r.recovery_count,changed_files=r.changed_files,tool_call_count=r.tool_call_count,event_count=r.event_count,workspace_ref=r.workspace_reference,model_snapshot=r.execution_manifest.model_snapshot,resumed_from_run_id=r.resumed_from_run_id,resumed_from_checkpoint_id=r.resumed_from_checkpoint_id)
 @app.post('/missions/{mission_id}/runs', response_model=RunResponse)
 def start_run(mission_id: UUID, request: RunCreate | None = None):
     m=missions.get(mission_id)
@@ -47,6 +47,15 @@ def get_run(run_id: UUID):
 def get_events(run_id: UUID):
     if not runs.get(run_id): raise HTTPException(404,'run not found')
     return [EventResponse(sequence=e.sequence,event_type=e.event_type,mission_run_id=e.mission_run_id,agent_run_id=e.agent_run_id,timestamp=e.timestamp,payload=e.payload) for e in sorted(runs.events_for(run_id),key=lambda x:x.sequence)]
+
+@app.post('/runs/{run_id}/resume', response_model=RunResponse)
+def resume_run(run_id: UUID, request: ResumeRequest):
+    try:
+        return run_response(runs.resume(run_id, request.checkpoint_id))
+    except ResumeNotFoundError as error:
+        raise HTTPException(404, str(error)) from error
+    except ResumeError as error:
+        raise HTTPException(409, str(error)) from error
 
 @app.get('/runs/{run_id}/replay', response_model=ReplayInspection)
 def inspect_run(run_id: UUID):

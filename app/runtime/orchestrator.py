@@ -136,18 +136,50 @@ class BasicMissionOrchestrator:
         self.snapshot_manager = snapshot_manager
         self.checkpoint_manager = checkpoint_manager
 
-    def run(self, mission_id: UUID, manifest: ExecutionManifest, fixture: Path, workspace_root: Path, mission_context: dict | None = None) -> MissionRunResult:
-        run_id = uuid4()
+    def run(
+        self,
+        mission_id: UUID,
+        manifest: ExecutionManifest,
+        fixture: Path,
+        workspace_root: Path,
+        mission_context: dict | None = None,
+        *,
+        run_id: UUID | None = None,
+        workspace: Path | None = None,
+        resume_checkpoint: CheckpointState | None = None,
+        resume_stage: str | None = None,
+        resumed_from_run_id: UUID | None = None,
+        resumed_from_checkpoint_id: UUID | None = None,
+        parent_pm_agent_run_id: UUID | None = None,
+    ) -> MissionRunResult:
+        run_id = run_id or uuid4()
         workspace_root.mkdir(parents=True, exist_ok=True)
-        workspace = workspace_root / str(run_id)
-        copytree(fixture, workspace)
+        workspace = workspace or workspace_root / str(run_id)
+        if resume_checkpoint is None:
+            copytree(fixture, workspace)
         initial_test_hashes = _test_hashes(workspace)
-        self.recorder.record(TraceEvent(mission_id=mission_id, mission_run_id=run_id, sequence=1, event_type="mission_started"))
+        self.recorder.record(
+            TraceEvent(
+                mission_id=mission_id,
+                mission_run_id=run_id,
+                sequence=1,
+                event_type="mission_started",
+                payload={
+                    key: str(value)
+                    for key, value in {
+                        "resumed_from_run_id": resumed_from_run_id,
+                        "resumed_from_checkpoint_id": resumed_from_checkpoint_id,
+                    }.items()
+                    if value is not None
+                },
+            )
+        )
         checkpoints = []
         tools = self.tools_factory(workspace)
+        pm_id = parent_pm_agent_run_id
         dev_ids = []
         qa_ids = []
-        recovery_attempt = 0
+        recovery_attempt = resume_checkpoint.agent_state.recovery_attempt if resume_checkpoint else 0
         budget = _recovery_budget(manifest.runtime_config)
 
         def execute(role, skills, handoff, attempt=0):
@@ -183,6 +215,8 @@ class BasicMissionOrchestrator:
                                 current_agent_run_id=agent_id,
                                 current_step=agent_state.step,
                                 agent_state=agent_state,
+                                handoffs=agent_state.handoffs,
+                                skill_versions=manifest.skill_versions,
                                 workspace_snapshot_id=snapshot.id,
                             )
                         )
@@ -223,71 +257,25 @@ class BasicMissionOrchestrator:
                 tool_call_count=sum(event.event_type == "tool_call" for event in events),
                 event_count=len(events),
                 checkpoint_ids=checkpoints,
+                resumed_from_run_id=resumed_from_run_id,
+                resumed_from_checkpoint_id=resumed_from_checkpoint_id,
             )
 
-        pm_id, pm_state = execute(Role.PM, ("common/tool_usage.md", "common/handoff.md", "roles/pm/SKILL.md"), {})
-        if not {"mission_summary", "developer_task"} <= pm_state.handoffs.keys():
-            return finish("FAILED", QAResult(status="failed", issues=["PM runtime did not produce a handoff"]))
-        pm = PMToDeveloperHandoff(**pm_state.handoffs)
-        self.recorder.record(
-            TraceEvent(
-                mission_id=mission_id,
-                mission_run_id=run_id,
-                agent_run_id=pm_id,
-                sequence=len(self.recorder.for_run(run_id)) + 1,
-                event_type="handoff_created",
-                payload=pm.model_dump(),
-            )
-        )
-        if self.snapshot_manager and self.checkpoint_manager:
-            snapshot = self.snapshot_manager.create(workspace)
-            checkpoints.append(
-                self.checkpoint_manager.create(
-                    CheckpointState(
-                        mission_run_id=run_id,
-                        current_agent_run_id=pm_id,
-                        current_step="pm_handoff",
-                        agent_state=pm_state,
-                        workspace_snapshot_id=snapshot.id,
-                    )
-                )
-            )
+        resumed_developer = None
+        recovery_context = None
+        if resume_checkpoint is None:
+            pm_id, pm_state = execute(Role.PM, ("common/tool_usage.md", "common/handoff.md", "roles/pm/SKILL.md"), {})
+            if not {"mission_summary", "developer_task"} <= pm_state.handoffs.keys():
+                return finish("FAILED", QAResult(status="failed", issues=["PM runtime did not produce a handoff"]))
+            pm = PMToDeveloperHandoff(**pm_state.handoffs)
             self.recorder.record(
                 TraceEvent(
                     mission_id=mission_id,
                     mission_run_id=run_id,
                     agent_run_id=pm_id,
                     sequence=len(self.recorder.for_run(run_id)) + 1,
-                    event_type="checkpoint_created",
-                    payload={"reason": "pm_handoff", "checkpoint_id": str(checkpoints[-1])},
-                )
-            )
-
-        qa = None
-        recovery_context = None
-        while True:
-            developer_handoff = {
-                "pm": pm.model_dump(),
-                "recovery_context": recovery_context.model_dump() if recovery_context else None,
-                "recovery_attempt": recovery_attempt,
-            }
-            dev_id, dev_state = execute(
-                Role.DEVELOPER,
-                ("common/tool_usage.md", "common/handoff.md", "roles/developer/SKILL.md"),
-                developer_handoff,
-                recovery_attempt,
-            )
-            dev_ids.append(dev_id)
-            if not {"status", "summary"} <= dev_state.handoffs.keys():
-                return finish("FAILED", QAResult(status="failed", issues=["Developer runtime did not produce a handoff"]))
-            dev = DeveloperToQAHandoff(**dev_state.handoffs)
-            self.recorder.record(
-                TraceEvent(
-                    mission_id=mission_id,
-                    mission_run_id=run_id,
-                    sequence=len(self.recorder.for_run(run_id)) + 1,
                     event_type="handoff_created",
-                    payload={"recovery_attempt": recovery_attempt, **dev.model_dump()},
+                    payload=pm.model_dump(),
                 )
             )
             if self.snapshot_manager and self.checkpoint_manager:
@@ -296,9 +284,11 @@ class BasicMissionOrchestrator:
                     self.checkpoint_manager.create(
                         CheckpointState(
                             mission_run_id=run_id,
-                            current_agent_run_id=dev_id,
-                            current_step=dev_state.step,
-                            agent_state=dev_state,
+                            current_agent_run_id=pm_id,
+                            current_step="pm_handoff",
+                            agent_state=pm_state,
+                            handoffs=pm_state.handoffs,
+                            skill_versions=manifest.skill_versions,
                             workspace_snapshot_id=snapshot.id,
                         )
                     )
@@ -307,11 +297,78 @@ class BasicMissionOrchestrator:
                     TraceEvent(
                         mission_id=mission_id,
                         mission_run_id=run_id,
+                        agent_run_id=pm_id,
                         sequence=len(self.recorder.for_run(run_id)) + 1,
                         event_type="checkpoint_created",
-                        payload={"reason": "developer_handoff", "checkpoint_id": str(checkpoints[-1]), "recovery_attempt": recovery_attempt},
+                        payload={"reason": "pm_handoff", "checkpoint_id": str(checkpoints[-1])},
                     )
                 )
+        elif resume_stage == "developer":
+            pm_id = pm_id or resume_checkpoint.current_agent_run_id
+            pm = PMToDeveloperHandoff(**resume_checkpoint.agent_state.handoffs)
+        elif resume_stage == "qa":
+            pm = PMToDeveloperHandoff(**resume_checkpoint.agent_state.handoffs["pm"])
+            resumed_developer = DeveloperToQAHandoff(**resume_checkpoint.agent_state.handoffs)
+            saved_recovery = resume_checkpoint.agent_state.handoffs.get("recovery_context")
+            if saved_recovery:
+                recovery_context = RecoveryContext.model_validate(saved_recovery)
+        else:
+            return finish("FAILED", QAResult(status="failed", issues=["unsupported resume stage"]))
+
+        qa = None
+        while True:
+            if resumed_developer is not None:
+                dev = resumed_developer
+                resumed_developer = None
+            else:
+                developer_handoff = {
+                    "pm": pm.model_dump(),
+                    "recovery_context": recovery_context.model_dump() if recovery_context else None,
+                    "recovery_attempt": recovery_attempt,
+                }
+                dev_id, dev_state = execute(
+                    Role.DEVELOPER,
+                    ("common/tool_usage.md", "common/handoff.md", "roles/developer/SKILL.md"),
+                    developer_handoff,
+                    recovery_attempt,
+                )
+                dev_ids.append(dev_id)
+                if not {"status", "summary"} <= dev_state.handoffs.keys():
+                    return finish("FAILED", QAResult(status="failed", issues=["Developer runtime did not produce a handoff"]))
+                dev = DeveloperToQAHandoff(**dev_state.handoffs)
+                self.recorder.record(
+                    TraceEvent(
+                        mission_id=mission_id,
+                        mission_run_id=run_id,
+                        sequence=len(self.recorder.for_run(run_id)) + 1,
+                        event_type="handoff_created",
+                        payload={"recovery_attempt": recovery_attempt, **dev.model_dump()},
+                    )
+                )
+                if self.snapshot_manager and self.checkpoint_manager:
+                    snapshot = self.snapshot_manager.create(workspace)
+                    checkpoints.append(
+                        self.checkpoint_manager.create(
+                            CheckpointState(
+                                mission_run_id=run_id,
+                                current_agent_run_id=dev_id,
+                                current_step=dev_state.step,
+                                agent_state=dev_state,
+                                handoffs=dev_state.handoffs,
+                                skill_versions=manifest.skill_versions,
+                                workspace_snapshot_id=snapshot.id,
+                            )
+                        )
+                    )
+                    self.recorder.record(
+                        TraceEvent(
+                            mission_id=mission_id,
+                            mission_run_id=run_id,
+                            sequence=len(self.recorder.for_run(run_id)) + 1,
+                            event_type="checkpoint_created",
+                            payload={"reason": "developer_handoff", "checkpoint_id": str(checkpoints[-1]), "recovery_attempt": recovery_attempt},
+                        )
+                    )
 
             qa_id, qa_state = execute(
                 Role.QA,

@@ -8,6 +8,8 @@ class MissionCreate(BaseModel):
     fixture: str='missions/demo_auth_bug/repo'
 class RunCreate(BaseModel):
     model_id: str | None = None
+class ResumeRequest(BaseModel):
+    checkpoint_id: UUID
 class MissionResponse(BaseModel): id: UUID; title: str; version: str; fixture: str
 class RunResponse(BaseModel):
     run_id: UUID
@@ -20,4 +22,6 @@ class RunResponse(BaseModel):
     event_count: int
     workspace_ref: str
     model_snapshot: ModelExecutionSnapshot | None = None
+    resumed_from_run_id: UUID | None = None
+    resumed_from_checkpoint_id: UUID | None = None
 class EventResponse(BaseModel): sequence: int; event_type: str; mission_run_id: UUID; agent_run_id: UUID|None; timestamp: Any; payload: dict
