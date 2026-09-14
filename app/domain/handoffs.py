@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 class DeveloperTask(BaseModel):
@@ -17,7 +19,15 @@ class DeveloperToQAHandoff(BaseModel):
     risks: list[str] = Field(default_factory=list)
 
 class QAResult(BaseModel):
-    status: str
+    status: Literal["passed", "failed", "pending"] = Field(
+        description=(
+            "Final QA execution verdict. Use passed only when validated run_test "
+            "evidence has exit_code 0 and success true; use failed when exit_code "
+            "is non-zero or success is false. Warnings, stderr text, and quality "
+            "concerns alone do not make status failed. pending is reserved for "
+            "an approval-waiting runtime state, not a final verdict."
+        )
+    )
     passed: int = 0
     failed: int = 0
     issues: list[str] = Field(default_factory=list)

@@ -2,6 +2,7 @@ import json
 from uuid import uuid4
 from pathlib import Path
 import pytest
+from app.domain.handoffs import QAResult
 from app.domain.models import AgentState, Role, SkillProfile
 from app.domain.contracts import ModelResponse, ToolCall, ToolResult
 from app.models.lmstudio import ProviderError
@@ -119,3 +120,28 @@ def test_non_execution_tool_output_keeps_existing_message_format():
     assert serialize_tool_result_for_provider(
         ToolCall(name='read_file', arguments={'path': 'app/auth.py'}), result
     ) == 'file contents'
+
+
+def test_qa_status_schema_describes_execution_verdict():
+    status = QAResult.model_json_schema()['properties']['status']
+
+    assert set(status['enum']) == {'passed', 'failed', 'pending'}
+    assert all(term in status['description'] for term in ('run_test', 'exit_code', 'success', 'Warnings'))
+
+
+def test_qa_status_schema_rejects_lifecycle_labels():
+    with pytest.raises(ValueError):
+        QAResult(status='completed')
+
+
+def test_qa_prompt_requires_evidence_and_separates_concerns():
+    prompt = DeterministicPromptCompiler(FilesystemSkillLoader(Path('skills'))).compile(
+        {},
+        SkillProfile(name='qa', skills=('common/tool_usage.md', 'common/handoff.md', 'roles/qa/SKILL.md')),
+    )['messages'][0]['content'].lower()
+
+    assert 'run_test' in prompt
+    assert 'before returning' in prompt
+    assert 'exit_code' in prompt and 'success' in prompt
+    assert 'warnings' in prompt and 'issues' in prompt
+    assert 'pending' in prompt and 'completed' in prompt
