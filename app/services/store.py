@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from app.domain.experiments import Experiment, ExperimentCell
+from app.domain.benchmarks import BenchmarkSuite
 from app.domain.models import MissionRecord, TraceEvent
 
 __all__ = ["AppStore", "MissionRecord", "store"]
@@ -17,6 +18,7 @@ class AppStore:
         self.experiments = {}
         self.experiment_cells = {}
         self.experiment_cell_keys = {}
+        self.benchmark_suites = {}
 
     def save_mission(self, mission): self.missions[mission.id] = MissionRecord(mission.title, mission.fixture, mission.id, mission.version)
     def get_mission(self, mission_id): return self.missions.get(mission_id)
@@ -59,6 +61,27 @@ class AppStore:
                 (item for item in self.experiment_cells.values() if item.experiment_id == experiment_id),
                 key=lambda item: (item.case_index, item.model_index, item.repetition_index),
             )
+        ]
+    def save_benchmark_suite(self, suite: BenchmarkSuite) -> None:
+        key = (suite.suite_id, suite.version)
+        existing = self.benchmark_suites.get(key)
+        if existing:
+            definition = suite.model_dump(exclude={"status", "spec_digest"})
+            previous_definition = existing.model_dump(exclude={"status", "spec_digest"})
+            if existing.status == "PUBLISHED" or previous_definition != definition:
+                if existing == suite:
+                    return
+                raise ValueError("published benchmark suite is immutable")
+            if suite.status != "PUBLISHED":
+                raise ValueError("benchmark suite version already exists")
+        self.benchmark_suites[key] = suite.model_copy(deep=True)
+    def get_benchmark_suite(self, suite_id, version):
+        suite = self.benchmark_suites.get((suite_id, version))
+        return suite.model_copy(deep=True) if suite else None
+    def list_benchmark_suites(self):
+        return [
+            self.benchmark_suites[key].model_copy(deep=True)
+            for key in sorted(self.benchmark_suites)
         ]
     def append_events(self, events):
         for event in events:

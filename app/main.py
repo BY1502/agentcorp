@@ -13,6 +13,7 @@ from .services.evaluation import RunEvaluationService
 from .services.aggregates import RunAggregateService
 from .services.experiments import ExperimentExecutionError, ExperimentExecutionService, ExperimentNotFoundError, ExperimentService
 from .services.experiment_analytics import ExperimentAnalyticsService
+from .services.benchmarks import BenchmarkSuiteConflictError, BenchmarkSuiteNotFoundError, BenchmarkSuiteService, BenchmarkSuiteValidationError
 from .domain.policy import PendingApproval
 from .domain.replay import ReplayInspection
 from .domain.metrics import RunMetrics
@@ -20,6 +21,7 @@ from .domain.evaluation import RunEvaluation
 from .domain.aggregates import ModelAggregate, RunAggregate
 from .domain.experiments import Experiment, ExperimentRunView, ExperimentSpec
 from .domain.experiment_analytics import ExperimentAnalytics
+from .domain.benchmarks import BenchmarkSuite, BenchmarkSuiteSpec
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
 
@@ -34,6 +36,7 @@ aggregates=RunAggregateService(storage, metrics, evaluation)
 experiments=ExperimentService(storage, runs.registry)
 experiment_execution=ExperimentExecutionService(storage, runs, experiments)
 experiment_analytics=ExperimentAnalyticsService(storage, aggregates)
+benchmark_suites=BenchmarkSuiteService(storage)
 @app.post('/missions', response_model=MissionResponse)
 def create_mission(request: MissionCreate):
     m=missions.create(request.title,request.fixture); return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
@@ -186,3 +189,30 @@ def get_experiment_analytics(experiment_id: UUID):
         return experiment_analytics.get(experiment_id)
     except ExperimentNotFoundError as error:
         raise HTTPException(404, 'experiment not found') from error
+
+@app.post('/benchmark-suites', response_model=BenchmarkSuite)
+def create_benchmark_suite(request: BenchmarkSuiteSpec):
+    try:
+        return benchmark_suites.create(request)
+    except BenchmarkSuiteConflictError as error:
+        raise HTTPException(409, str(error)) from error
+
+@app.get('/benchmark-suites', response_model=list[BenchmarkSuite])
+def list_benchmark_suites():
+    return benchmark_suites.list()
+
+@app.get('/benchmark-suites/{suite_id}/versions/{version}', response_model=BenchmarkSuite)
+def get_benchmark_suite(suite_id: str, version: int):
+    try:
+        return benchmark_suites.get(suite_id, version)
+    except BenchmarkSuiteNotFoundError as error:
+        raise HTTPException(404, 'benchmark suite version not found') from error
+
+@app.post('/benchmark-suites/{suite_id}/versions/{version}/publish', response_model=BenchmarkSuite)
+def publish_benchmark_suite(suite_id: str, version: int):
+    try:
+        return benchmark_suites.publish(suite_id, version)
+    except BenchmarkSuiteNotFoundError as error:
+        raise HTTPException(404, 'benchmark suite version not found') from error
+    except (BenchmarkSuiteConflictError, BenchmarkSuiteValidationError) as error:
+        raise HTTPException(409, str(error)) from error

@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from app.domain.experiments import Experiment, ExperimentCell
+from app.domain.benchmarks import BenchmarkSuite
 from app.domain.models import CheckpointState, MissionRecord, MissionRunResult, TraceEvent, WorkspaceSnapshot
 from app.domain.policy import PendingApproval
 from app.tracing.recorder import sanitize
@@ -68,7 +69,7 @@ class SQLiteStore:
     def _initialize(self) -> None:
         with self._lock:
             version = self._connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2, 3):
+            if version not in (0, 1, 2, 3, 4):
                 raise RuntimeError(f"unsupported AgentCorp storage schema version: {version}")
             if version == 0:
                 self._connection.execute("PRAGMA user_version = 1")
@@ -125,10 +126,19 @@ class SQLiteStore:
                     run_id TEXT,
                     UNIQUE (experiment_id, case_id, model_id, repetition_index)
                 );
+                CREATE TABLE IF NOT EXISTS benchmark_suites (
+                    suite_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    spec_json TEXT NOT NULL,
+                    PRIMARY KEY (suite_id, version)
+                );
                 """
             )
             if version < 3:
                 self._connection.execute("PRAGMA user_version = 3")
+            if version < 4:
+                self._connection.execute("PRAGMA user_version = 4")
 
     def close(self) -> None:
         with self._lock:
@@ -389,6 +399,42 @@ class SQLiteStore:
                 (str(experiment_id),),
             ).fetchall()
         return [self._experiment_cell(row) for row in rows]
+
+    def save_benchmark_suite(self, suite: BenchmarkSuite) -> None:
+        with self._lock, self._connection:
+            existing = self._connection.execute(
+                "SELECT spec_json FROM benchmark_suites WHERE suite_id = ? AND version = ?",
+                (suite.suite_id, suite.version),
+            ).fetchone()
+            if existing is not None:
+                previous = BenchmarkSuite.model_validate(json.loads(existing["spec_json"]))
+                definition = suite.model_dump(exclude={"status", "spec_digest"})
+                previous_definition = previous.model_dump(exclude={"status", "spec_digest"})
+                if previous.status == "PUBLISHED" or previous_definition != definition:
+                    if previous == suite:
+                        return
+                    raise ValueError("published benchmark suite is immutable")
+                if suite.status != "PUBLISHED":
+                    raise ValueError("benchmark suite version already exists")
+            self._connection.execute(
+                "INSERT OR REPLACE INTO benchmark_suites(suite_id, version, status, spec_json) VALUES (?, ?, ?, ?)",
+                (suite.suite_id, suite.version, suite.status.value, _json(suite)),
+            )
+
+    def get_benchmark_suite(self, suite_id: str, version: int) -> BenchmarkSuite | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT spec_json FROM benchmark_suites WHERE suite_id = ? AND version = ?",
+                (suite_id, version),
+            ).fetchone()
+        return BenchmarkSuite.model_validate(json.loads(row["spec_json"])) if row else None
+
+    def list_benchmark_suites(self) -> list[BenchmarkSuite]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT spec_json FROM benchmark_suites ORDER BY suite_id ASC, version ASC"
+            ).fetchall()
+        return [BenchmarkSuite.model_validate(json.loads(row["spec_json"])) for row in rows]
 
     def finalize_run(self, result: MissionRunResult, events: list[TraceEvent]) -> None:
         """Commit the completed run and its append-only events together."""
