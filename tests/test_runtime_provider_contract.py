@@ -145,3 +145,59 @@ def test_qa_prompt_requires_evidence_and_separates_concerns():
     assert 'exit_code' in prompt and 'success' in prompt
     assert 'warnings' in prompt and 'issues' in prompt
     assert 'pending' in prompt and 'completed' in prompt
+
+
+def test_qa_prompt_prefers_exact_developer_test_target():
+    prompt = DeterministicPromptCompiler(FilesystemSkillLoader(Path('skills'))).compile(
+        {
+            'messages': [],
+            'handoff': {'developer': {'tests_run': ['tests/test_auth.py']}},
+            'expected_output': '',
+            'final_output': '',
+        },
+        SkillProfile(name='qa', skills=('common/tool_usage.md', 'common/handoff.md', 'roles/qa/SKILL.md')),
+    )
+    text = '\n'.join(message['content'] for message in prompt['messages']).lower()
+
+    assert 'tests_run' in text
+    assert 'workspace-relative' in text
+    assert 'preserve' in text and 'exactly' in text
+    assert 'absolute path' in text
+    assert 'do not invent' in text
+    assert 'not the final qa' in text
+    assert 'tests/test_auth.py' in text
+
+
+@pytest.mark.parametrize(
+    'targets',
+    [
+        ['tests/unit/test_auth.py'],
+        ['tests/test_auth.py', 'tests/test_session.py'],
+    ],
+)
+def test_qa_prompt_preserves_nested_and_multiple_developer_targets(targets):
+    prompt = DeterministicPromptCompiler(FilesystemSkillLoader(Path('skills'))).compile(
+        {
+            'messages': [],
+            'handoff': {'developer': {'tests_run': targets}},
+            'expected_output': '',
+            'final_output': '',
+        },
+        SkillProfile(name='qa', skills=('common/tool_usage.md', 'common/handoff.md', 'roles/qa/SKILL.md')),
+    )
+    text = '\n'.join(message['content'] for message in prompt['messages'])
+
+    for target in targets:
+        assert target in text
+    if len(targets) > 1:
+        assert text.index(targets[0]) < text.index(targets[1])
+
+
+def test_qa_prompt_keeps_empty_handoff_behavior_without_inventing_target():
+    prompt = DeterministicPromptCompiler(FilesystemSkillLoader(Path('skills'))).compile(
+        {'messages': [], 'handoff': {}, 'expected_output': '', 'final_output': ''},
+        SkillProfile(name='qa', skills=('common/tool_usage.md', 'common/handoff.md', 'roles/qa/SKILL.md')),
+    )['messages'][0]['content'].lower()
+
+    assert 'tests_run' in prompt and 'empty or absent' in prompt
+    assert 'do not invent' in prompt and 'test target' in prompt
