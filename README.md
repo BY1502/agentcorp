@@ -83,7 +83,7 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·approval 조회·resume를 제공합니다. `GET /runs/{id}/metrics`는 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool을 호출하거나 historical data를 변경하지 않습니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
+현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·evaluation·approval 조회·resume를 제공합니다. `GET /runs/{id}/metrics`와 `GET /runs/{id}/evaluation`은 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool·LLM judge를 호출하거나 historical data를 변경하지 않습니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
 
 ## 테스트
 

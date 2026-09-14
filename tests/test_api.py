@@ -40,3 +40,13 @@ def test_get_run_metrics():
 
 def test_unknown_run_metrics_returns_404():
     assert client.get('/runs/'+str(uuid4())+'/metrics').status_code==404
+
+def test_get_run_evaluation():
+    mission=client.post('/missions',json={}).json(); run=client.post('/missions/'+mission['id']+'/runs').json()
+    response=client.get('/runs/'+run['run_id']+'/evaluation')
+    assert response.status_code==200 and response.json()['run_id']==run['run_id']
+    assert response.json()['status']=='PASS'
+    assert 'stdout' not in response.text and 'reasoning' not in response.text
+
+def test_unknown_run_evaluation_returns_404():
+    assert client.get('/runs/'+str(uuid4())+'/evaluation').status_code==404

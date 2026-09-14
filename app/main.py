@@ -9,9 +9,11 @@ from .services.run import ApprovalError, ApprovalNotFoundError, ResumeError, Res
 from .persistence.sqlite import SQLiteStore
 from .services.replay import ReplayService, RunNotFoundError
 from .services.metrics import RunMetricsService
+from .services.evaluation import RunEvaluationService
 from .domain.policy import PendingApproval
 from .domain.replay import ReplayInspection
 from .domain.metrics import RunMetrics
+from .domain.evaluation import RunEvaluation
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
 
@@ -21,6 +23,7 @@ def health() -> dict[str, str]: return {"status": "ok"}
 storage = SQLiteStore(settings.storage_path)
 missions=MissionService(storage); runs=RunService(storage=storage)
 metrics=RunMetricsService(storage)
+evaluation=RunEvaluationService(storage, metrics)
 @app.post('/missions', response_model=MissionResponse)
 def create_mission(request: MissionCreate):
     m=missions.create(request.title,request.fixture); return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
@@ -109,5 +112,12 @@ def inspect_run(run_id: UUID):
 def get_metrics(run_id: UUID):
     try:
         return metrics.get(run_id)
+    except RunNotFoundError as error:
+        raise HTTPException(404, 'run not found') from error
+
+@app.get('/runs/{run_id}/evaluation', response_model=RunEvaluation)
+def get_evaluation(run_id: UUID):
+    try:
+        return evaluation.get(run_id)
     except RunNotFoundError as error:
         raise HTTPException(404, 'run not found') from error

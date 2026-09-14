@@ -154,6 +154,8 @@ Tests cover deterministic skill loading/checksums, prompt ordering, traversal re
 - Interview workflows, HR/promotion logic, CEO/CTO roles, and a company UI.
 - Frontend and full Blackbox visualization.
 - Automatic model/skill evaluation, judge models, statistical comparisons, and leaderboard features.
+
+PHASE 8 observability foundation adds read-only `RunMetricsService` and `RunEvaluationService`. Metrics and deterministic evaluation are derived on read from persisted run records; evaluation uses versioned code-owned rules and safe evidence references only. It does not call providers/tools, persist evaluation records, inspect workspace contents, or use an LLM judge.
 - Full checkpoint branching UX; v0.1 provides serializable state and a local copy-based fork seam.
 - PostgreSQL deployment, migrations beyond basic setup, multi-process workers, queues, Redis, Celery, Docker Compose, Kubernetes, and microservices.
 - Arbitrary shell execution, unrestricted tools, browser/network tools, and long-running async orchestration.
