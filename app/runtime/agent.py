@@ -1,7 +1,7 @@
 import json
 from uuid import UUID
 
-from app.domain.contracts import ModelRequest, ToolCall
+from app.domain.contracts import ModelRequest, ToolCall, ToolResult
 from app.domain.models import AgentState, TraceEvent
 from app.domain.policy import ApprovalStatus, PendingApproval, PolicyAction, PolicyDecision, PolicyEvaluator, ToolCallSnapshot
 from app.models.lmstudio import ProviderError
@@ -15,6 +15,27 @@ TOOL_SPECS = {
     "edit_file": {"name": "edit_file", "description": "Replace text in one workspace file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "allow_multiple": {"type": "boolean"}}, "required": ["path", "old_text", "new_text"], "additionalProperties": False}},
     "run_test": {"name": "run_test", "description": "Run pytest below a workspace path.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "timeout": {"type": "integer"}}, "additionalProperties": False}},
 }
+
+
+def serialize_tool_result_for_provider(call: ToolCall, result: ToolResult) -> str:
+    """Serialize execution metadata without changing the validated tool result."""
+    if "exit_code" not in result.metadata:
+        return result.output or result.error or ""
+
+    path = str(call.arguments.get("path", "tests"))
+    return json.dumps(
+        {
+            "tool_name": call.name,
+            "command": f"pytest {path} -q -c /dev/null",
+            "path": path,
+            "exit_code": result.metadata["exit_code"],
+            "success": result.metadata["exit_code"] == 0,
+            "stdout": result.output,
+            "stderr": result.error or "",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 class BasicAgentRuntime:
@@ -78,7 +99,7 @@ class BasicAgentRuntime:
         state.messages.append({
             "role": "tool",
             "tool_call_id": call_id,
-            "content": result.output or result.error or "",
+            "content": serialize_tool_result_for_provider(call, result),
         })
         if result.success and call.name == "edit_file" and self.checkpoint:
             checkpoint_id = self.checkpoint(state)

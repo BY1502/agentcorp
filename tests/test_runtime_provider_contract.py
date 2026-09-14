@@ -1,10 +1,11 @@
+import json
 from uuid import uuid4
 from pathlib import Path
 import pytest
 from app.domain.models import AgentState, Role, SkillProfile
 from app.domain.contracts import ModelResponse, ToolCall, ToolResult
 from app.models.lmstudio import ProviderError
-from app.runtime.agent import BasicAgentRuntime
+from app.runtime.agent import BasicAgentRuntime, serialize_tool_result_for_provider
 from app.skills.filesystem import FilesystemSkillLoader, DeterministicPromptCompiler
 from app.tracing.recorder import InMemoryTraceRecorder
 
@@ -74,4 +75,47 @@ def test_runtime_preserves_assistant_tool_call_before_tool_result():
     assert any(message.get('role')=='assistant' and message.get('tool_calls') for message in provider.requests[1].messages)
     assert any(message.get('tool_call_id')=='call_1' for message in provider.requests[1].messages)
     assert 'status' in provider.requests[1].messages[0]['content'] and 'issues' in provider.requests[1].messages[0]['content']
+    evidence = json.loads(next(message['content'] for message in provider.requests[1].messages if message.get('role') == 'tool'))
+    assert evidence == {
+        'command': 'pytest tests -q -c /dev/null',
+        'exit_code': 0,
+        'path': 'tests',
+        'stderr': '',
+        'stdout': 'passed',
+        'success': True,
+        'tool_name': 'run_test',
+    }
     assert provider.requests[0].response_schema is None and provider.requests[1].response_schema is None
+
+
+@pytest.mark.parametrize(
+    ('exit_code', 'stdout', 'stderr', 'expected_success'),
+    [
+        (0, '1 passed', '', True),
+        (0, '1 passed, 1 warning', '', True),
+        (1, '1 failed', '', False),
+        (0, '1 passed', 'DeprecationWarning...', True),
+    ],
+)
+def test_execution_metadata_is_serialized_for_provider(exit_code, stdout, stderr, expected_success):
+    content = serialize_tool_result_for_provider(
+        ToolCall(name='run_test', arguments={'path': 'tests/test_example.py'}),
+        ToolResult(success=expected_success, output=stdout, error=stderr, metadata={'exit_code': exit_code}),
+    )
+
+    evidence = json.loads(content)
+    assert evidence['tool_name'] == 'run_test'
+    assert evidence['command'] == 'pytest tests/test_example.py -q -c /dev/null'
+    assert evidence['path'] == 'tests/test_example.py'
+    assert evidence['exit_code'] == exit_code
+    assert evidence['success'] is expected_success
+    assert evidence['stdout'] == stdout
+    assert evidence['stderr'] == stderr
+
+
+def test_non_execution_tool_output_keeps_existing_message_format():
+    result = ToolResult(success=True, output='file contents', metadata={})
+
+    assert serialize_tool_result_for_provider(
+        ToolCall(name='read_file', arguments={'path': 'app/auth.py'}), result
+    ) == 'file contents'
