@@ -43,6 +43,14 @@ class RunAggregateService:
                 unavailable.append(run)
         return readings, unavailable
 
+    def read_runs(self, runs):
+        """Read metrics/evaluations for an explicit Run scope without selecting more Runs."""
+        return self._read(sorted(runs, key=lambda item: str(item.mission_run_id)))
+
+    def aggregate_readings(self, readings, run_count, unavailable=0):
+        """Apply the same PHASE 8 aggregation rules to an explicit Run scope."""
+        return self._aggregate(readings, run_count, unavailable)
+
     def _aggregate(self, readings, run_count, unavailable, model_key=None):
         metrics = [item[1] for item in readings]
         evaluations = [item[2] for item in readings]

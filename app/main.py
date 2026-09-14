@@ -12,12 +12,14 @@ from .services.metrics import RunMetricsService
 from .services.evaluation import RunEvaluationService
 from .services.aggregates import RunAggregateService
 from .services.experiments import ExperimentExecutionError, ExperimentExecutionService, ExperimentNotFoundError, ExperimentService
+from .services.experiment_analytics import ExperimentAnalyticsService
 from .domain.policy import PendingApproval
 from .domain.replay import ReplayInspection
 from .domain.metrics import RunMetrics
 from .domain.evaluation import RunEvaluation
 from .domain.aggregates import ModelAggregate, RunAggregate
 from .domain.experiments import Experiment, ExperimentRunView, ExperimentSpec
+from .domain.experiment_analytics import ExperimentAnalytics
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
 
@@ -31,6 +33,7 @@ evaluation=RunEvaluationService(storage, metrics)
 aggregates=RunAggregateService(storage, metrics, evaluation)
 experiments=ExperimentService(storage, runs.registry)
 experiment_execution=ExperimentExecutionService(storage, runs, experiments)
+experiment_analytics=ExperimentAnalyticsService(storage, aggregates)
 @app.post('/missions', response_model=MissionResponse)
 def create_mission(request: MissionCreate):
     m=missions.create(request.title,request.fixture); return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
@@ -176,3 +179,10 @@ def get_experiment_runs(experiment_id: UUID):
         raise HTTPException(404, 'experiment not found') from error
     except ExperimentExecutionError as error:
         raise HTTPException(409, str(error)) from error
+
+@app.get('/experiments/{experiment_id}/analytics', response_model=ExperimentAnalytics)
+def get_experiment_analytics(experiment_id: UUID):
+    try:
+        return experiment_analytics.get(experiment_id)
+    except ExperimentNotFoundError as error:
+        raise HTTPException(404, 'experiment not found') from error
