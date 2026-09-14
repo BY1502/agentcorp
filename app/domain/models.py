@@ -100,6 +100,7 @@ class AgentState(BaseModel):
     finished: bool = False
     allowed_tools: tuple[str, ...] = ()
     expected_output: str | None = None
+    required_tool_before_final: str | None = None
     recovery_attempt: int = 0
     waiting_approval: bool = False
     pending_approval_id: UUID | None = None

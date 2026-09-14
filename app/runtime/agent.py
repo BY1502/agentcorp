@@ -39,7 +39,7 @@ def serialize_tool_result_for_provider(call: ToolCall, result: ToolResult) -> st
 
 
 class BasicAgentRuntime:
-    def __init__(self, provider, compiler, tools, recorder, mission_id, run_id, checkpoint=None, policy_evaluator=None, approval_handler=None):
+    def __init__(self, provider, compiler, tools, recorder, mission_id, run_id, checkpoint=None, policy_evaluator=None, approval_handler=None, max_completion_corrections=1):
         self.provider = provider
         self.compiler = compiler
         self.tools = tools
@@ -49,6 +49,7 @@ class BasicAgentRuntime:
         self.checkpoint = checkpoint
         self.policy_evaluator = policy_evaluator or PolicyEvaluator()
         self.approval_handler = approval_handler
+        self.max_completion_corrections = max_completion_corrections
 
     def emit(self, typ, agent_id, payload=None):
         self.recorder.record(TraceEvent(
@@ -151,6 +152,7 @@ class BasicAgentRuntime:
 
     def _run_loop(self, agent_run_id: UUID, state: AgentState) -> AgentState:
         schema_models = {"PMToDeveloperHandoff": PMToDeveloperHandoff, "DeveloperToQAHandoff": DeveloperToQAHandoff, "QAResult": QAResult}
+        completion_corrections = 0
         while not state.finished:
             if state.profile is None:
                 raise ValueError("agent skill profile is required")
@@ -230,6 +232,36 @@ class BasicAgentRuntime:
                     return state
                 self._execute_tool(agent_run_id, state, ToolCall(name=snapshot.tool_name, arguments=snapshot.arguments, call_id=snapshot.call_id))
             else:
+                required_tool = state.required_tool_before_final
+                has_required_evidence = any(
+                    item.get("tool_name") == required_tool for item in state.tool_results
+                )
+                if required_tool and not has_required_evidence:
+                    self.emit(
+                        "validation_error",
+                        agent_run_id,
+                        {
+                            "category": "required_tool_missing",
+                            "reason": "required_tool_missing",
+                            "required_tool": required_tool,
+                            "correction_attempt": completion_corrections,
+                        },
+                    )
+                    if completion_corrections >= self.max_completion_corrections:
+                        state.finished = True
+                        return state
+                    completion_corrections += 1
+                    state.messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Final {state.expected_output} cannot be accepted yet because "
+                                f"required {required_tool} execution evidence is missing. "
+                                f"Call the {required_tool} tool before returning the final {state.expected_output}."
+                            ),
+                        }
+                    )
+                    continue
                 try:
                     if state.expected_output in schema_models:
                         schema_models[state.expected_output](**response.output)

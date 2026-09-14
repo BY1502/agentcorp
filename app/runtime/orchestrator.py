@@ -257,6 +257,7 @@ class BasicMissionOrchestrator:
                 handoffs=handoff,
                 allowed_tools=permissions[role],
                 expected_output=expected[role],
+                required_tool_before_final="run_test" if role == Role.QA else None,
                 recovery_attempt=attempt,
             )
 

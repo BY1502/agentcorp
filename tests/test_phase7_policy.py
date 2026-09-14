@@ -88,6 +88,7 @@ def test_policy_allows_read_only_tool(tmp_path):
         {"kind": "tool", "name": "read_file", "arguments": {"path": "app/auth.py"}},
         {"output": {"status": "completed", "summary": "inspected"}},
         {"output": {"status": "pending", "issues": ["no test evidence"]}},
+        {"output": {"status": "pending", "issues": ["no test evidence"]}},
     ]
     storage, mission, service = run_service(tmp_path, responses)
     result = service.start(mission, "selected")

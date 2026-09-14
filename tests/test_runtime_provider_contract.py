@@ -71,7 +71,7 @@ def test_runtime_preserves_assistant_tool_call_before_tool_result():
     class Tool:
         def execute(self,call): return ToolResult(success=True,output='passed',metadata={'exit_code':0})
     provider=SequentialProvider(); run=uuid4(); tr=InMemoryTraceRecorder()
-    state=AgentState(mission_run_id=run,profile=SkillProfile(name='x',skills=('common/tool_usage.md',)),allowed_tools=('run_test',),expected_output='QAResult')
+    state=AgentState(mission_run_id=run,role=Role.QA,profile=SkillProfile(name='x',skills=('common/tool_usage.md',)),allowed_tools=('run_test',),expected_output='QAResult',required_tool_before_final='run_test')
     BasicAgentRuntime(provider,DeterministicPromptCompiler(FilesystemSkillLoader(Path('skills'))),Tool(),tr,uuid4(),run).run(uuid4(),state)
     assert any(message.get('role')=='assistant' and message.get('tool_calls') for message in provider.requests[1].messages)
     assert any(message.get('tool_call_id')=='call_1' for message in provider.requests[1].messages)
@@ -201,3 +201,100 @@ def test_qa_prompt_keeps_empty_handoff_behavior_without_inventing_target():
 
     assert 'tests_run' in prompt and 'empty or absent' in prompt
     assert 'do not invent' in prompt and 'test target' in prompt
+
+
+def qa_state():
+    return AgentState(
+        mission_run_id=uuid4(),
+        role=Role.QA,
+        profile=SkillProfile(name='qa', skills=('common/tool_usage.md',)),
+        allowed_tools=('run_test',),
+        expected_output='QAResult',
+        required_tool_before_final='run_test',
+    )
+
+
+class ScriptedProvider:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.requests = []
+
+    def complete(self, request):
+        self.requests.append(request)
+        return next(self.responses)
+
+
+class CountingTool:
+    def __init__(self, exit_code=0):
+        self.calls = 0
+        self.exit_code = exit_code
+
+    def execute(self, call):
+        self.calls += 1
+        return ToolResult(
+            success=self.exit_code == 0,
+            output='test output',
+            error='' if self.exit_code == 0 else 'test failed',
+            metadata={'exit_code': self.exit_code},
+        )
+
+
+def run_qa_protocol(responses, tool=None):
+    provider = ScriptedProvider(responses)
+    recorder = InMemoryTraceRecorder()
+    tool = tool or CountingTool()
+    state = qa_state()
+    result = BasicAgentRuntime(
+        provider,
+        DeterministicPromptCompiler(FilesystemSkillLoader(Path('skills'))),
+        tool,
+        recorder,
+        uuid4(),
+        state.mission_run_id,
+    ).run(uuid4(), state)
+    return result, provider, tool, recorder
+
+
+def test_qa_final_first_gets_one_bounded_correction_turn():
+    result, provider, tool, recorder = run_qa_protocol(
+        [
+            ModelResponse(output={'status': 'passed'}),
+            ModelResponse(kind='tool', tool_call=ToolCall(name='run_test', arguments={'path': 'tests'})),
+            ModelResponse(output={'status': 'passed'}),
+        ]
+    )
+
+    assert result.finished and result.handoffs['status'] == 'passed'
+    assert tool.calls == 1
+    assert len(provider.requests) == 3
+    assert any(
+        'required run_test execution evidence is missing' in message['content']
+        for message in provider.requests[1].messages
+        if message['role'] == 'user'
+    )
+    assert any(event.payload.get('reason') == 'required_tool_missing' for event in recorder.events)
+
+
+def test_qa_repeated_final_exhausts_without_tool_execution():
+    result, provider, tool, recorder = run_qa_protocol(
+        [ModelResponse(output={'status': 'passed'}), ModelResponse(output={'status': 'passed'})]
+    )
+
+    assert result.finished and not result.handoffs
+    assert tool.calls == 0
+    assert len(provider.requests) == 2
+    assert sum(event.payload.get('reason') == 'required_tool_missing' for event in recorder.events) == 2
+
+
+def test_qa_exit_four_is_evidence_not_a_missing_tool():
+    result, _, tool, recorder = run_qa_protocol(
+        [
+            ModelResponse(kind='tool', tool_call=ToolCall(name='run_test', arguments={'path': 'missing.py'})),
+            ModelResponse(output={'status': 'failed'}),
+        ],
+        CountingTool(exit_code=4),
+    )
+
+    assert result.finished and result.handoffs['status'] == 'failed'
+    assert tool.calls == 1
+    assert not any(event.payload.get('reason') == 'required_tool_missing' for event in recorder.events)
