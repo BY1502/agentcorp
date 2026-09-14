@@ -28,3 +28,15 @@ def test_unknown_mission_returns_404():
 
 def test_unknown_run_returns_404():
     missing=str(uuid4()); assert client.get('/runs/'+missing).status_code==404; assert client.get('/runs/'+missing+'/events').status_code==404
+
+def test_get_run_metrics():
+    mission=client.post('/missions',json={}).json(); run=client.post('/missions/'+mission['id']+'/runs').json()
+    response=client.get('/runs/'+run['run_id']+'/metrics')
+    data=response.json()
+    assert response.status_code==200 and data['run_id']==run['run_id']
+    assert data['status']=='PASSED' and data['event_count']==run['event_count']
+    assert data['tool_call_count']==run['tool_call_count'] and data['model_name']=='fake-default'
+    assert 'stdout' not in response.text and 'reasoning' not in response.text
+
+def test_unknown_run_metrics_returns_404():
+    assert client.get('/runs/'+str(uuid4())+'/metrics').status_code==404
