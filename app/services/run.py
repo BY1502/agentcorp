@@ -142,8 +142,7 @@ class RunService:
         self.policy_version = str(policy_version)
         self.approval_ttl_seconds = approval_ttl_seconds
 
-    def start(self, mission, model_id: str | None = None, approval_mode: str | None = None):
-        resolved_config = self.registry.resolve(model_id)
+    def current_policy_snapshot(self, approval_mode: str | None = None) -> PolicyExecutionSnapshot:
         selected_approval_mode = approval_mode if approval_mode is not None else self.approval_mode
         policy_config = PolicyExecutionSnapshot(
             mode=selected_approval_mode,
@@ -156,8 +155,51 @@ class RunService:
             policy_version=policy_config.policy_version,
             rules=dict(policy_config.rules),
         )
-        provider = self.provider_factory.create(resolved_config)
-        loader = FilesystemSkillLoader(self.skills_root)
+        return policy_config
+
+    def start(
+        self,
+        mission,
+        model_id: str | None = None,
+        approval_mode: str | None = None,
+        *,
+        model_snapshot: ModelExecutionSnapshot | None = None,
+        runtime_config: dict | None = None,
+        policy_snapshot: PolicyExecutionSnapshot | None = None,
+        skill_versions: tuple | None = None,
+        fixture: Path | None = None,
+        run_id=None,
+        initial_workspace_snapshot_id=None,
+    ):
+        policy_config = policy_snapshot or self.current_policy_snapshot(approval_mode)
+        if model_snapshot is None:
+            resolved_config = self.registry.resolve(model_id)
+            model_snapshot = ModelExecutionSnapshot.from_config(resolved_config)
+            provider = self.provider_factory.create(resolved_config)
+        else:
+            provider = self.provider_factory.create_from_snapshot(model_snapshot)
+        if skill_versions is None:
+            loader = FilesystemSkillLoader(self.skills_root)
+            frozen_skill_versions = loader.snapshot(
+                [
+                    "common/tool_usage.md",
+                    "common/handoff.md",
+                    "roles/pm/SKILL.md",
+                    "roles/developer/SKILL.md",
+                    "roles/qa/SKILL.md",
+                ]
+            )
+        else:
+            frozen_skill_versions = tuple(skill_versions)
+            loader = SnapshotSkillLoader(frozen_skill_versions)
+        frozen_runtime_config = runtime_config if runtime_config is not None else {
+            "max_retries": 0,
+            "max_recovery_attempts": 1,
+            "approval_mode": policy_config.mode,
+            "policy_version": policy_config.policy_version,
+            "policy_rules": dict(policy_config.rules),
+            "approval_ttl_seconds": policy_config.approval_ttl_seconds,
+        }
         recorder = InMemoryTraceRecorder()
         snapshot_manager = LocalWorkspaceSnapshotManager(self.workspace_root, self.storage)
         checkpoint_manager = InMemoryCheckpointManager(snapshot_manager, self.storage)
@@ -167,18 +209,10 @@ class RunService:
             employee_assignments={role: uuid4() for role in Role},
             model_references={},
             role_levels={role: Level.SENIOR for role in Role},
-            skill_versions=loader.snapshot(
-                [
-                    "common/tool_usage.md",
-                    "common/handoff.md",
-                    "roles/pm/SKILL.md",
-                    "roles/developer/SKILL.md",
-                    "roles/qa/SKILL.md",
-                ]
-            ),
-            runtime_config={"max_retries": 0, "max_recovery_attempts": 1, "approval_mode": selected_approval_mode, "policy_version": policy_config.policy_version, "policy_rules": dict(policy_config.rules), "approval_ttl_seconds": policy_config.approval_ttl_seconds},
-            initial_workspace_snapshot_id=uuid4(),
-            model_snapshot=ModelExecutionSnapshot.from_config(resolved_config),
+            skill_versions=frozen_skill_versions,
+            runtime_config=frozen_runtime_config,
+            initial_workspace_snapshot_id=initial_workspace_snapshot_id or uuid4(),
+            model_snapshot=model_snapshot,
             policy_snapshot=policy_config,
         )
         result = BasicMissionOrchestrator(
@@ -192,9 +226,10 @@ class RunService:
         ).run(
             mission.id,
             manifest,
-            Path(mission.fixture),
+            fixture or Path(mission.fixture),
             self.workspace_root,
             mission_context=_mission_context(mission),
+            run_id=run_id,
         )
         events = recorder.for_run(result.mission_run_id)
         self.storage.finalize_run(result, events)

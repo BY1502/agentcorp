@@ -6,7 +6,7 @@ from threading import RLock
 from typing import Any
 from uuid import UUID
 
-from app.domain.experiments import Experiment
+from app.domain.experiments import Experiment, ExperimentCell
 from app.domain.models import CheckpointState, MissionRecord, MissionRunResult, TraceEvent, WorkspaceSnapshot
 from app.domain.policy import PendingApproval
 from app.tracing.recorder import sanitize
@@ -68,7 +68,7 @@ class SQLiteStore:
     def _initialize(self) -> None:
         with self._lock:
             version = self._connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, 3):
                 raise RuntimeError(f"unsupported AgentCorp storage schema version: {version}")
             if version == 0:
                 self._connection.execute("PRAGMA user_version = 1")
@@ -112,10 +112,23 @@ class SQLiteStore:
                     status TEXT NOT NULL,
                     spec_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS experiment_cells (
+                    cell_id TEXT PRIMARY KEY,
+                    experiment_id TEXT NOT NULL,
+                    case_id TEXT NOT NULL,
+                    case_index INTEGER NOT NULL,
+                    model_id TEXT NOT NULL,
+                    model_index INTEGER NOT NULL,
+                    repetition_index INTEGER NOT NULL,
+                    workspace_snapshot_id TEXT,
+                    mission_id TEXT,
+                    run_id TEXT,
+                    UNIQUE (experiment_id, case_id, model_id, repetition_index)
+                );
                 """
             )
-            if version < 2:
-                self._connection.execute("PRAGMA user_version = 2")
+            if version < 3:
+                self._connection.execute("PRAGMA user_version = 3")
 
     def close(self) -> None:
         with self._lock:
@@ -289,7 +302,9 @@ class SQLiteStore:
             ).fetchone()
             if existing is not None:
                 previous = Experiment.model_validate(json.loads(existing["spec_json"]))
-                if previous.status == "SEALED" and previous != experiment:
+                previous_definition = previous.model_dump(exclude={"status", "expected_run_count"})
+                definition = experiment.model_dump(exclude={"status", "expected_run_count"})
+                if previous.status != "DRAFT" and previous_definition != definition:
                     raise ValueError("sealed experiment is immutable")
             self._connection.execute(
                 "INSERT OR REPLACE INTO experiments(experiment_id, status, spec_json) VALUES (?, ?, ?)",
@@ -303,6 +318,77 @@ class SQLiteStore:
                 (str(experiment_id),),
             ).fetchone()
         return Experiment.model_validate(json.loads(row["spec_json"])) if row else None
+
+    def save_experiment_cell(self, cell: ExperimentCell) -> None:
+        with self._lock, self._connection:
+            existing = self._connection.execute(
+                "SELECT * FROM experiment_cells WHERE cell_id = ?",
+                (str(cell.cell_id),),
+            ).fetchone()
+            if existing is not None:
+                identity = {
+                    "experiment_id": str(cell.experiment_id),
+                    "case_id": cell.case_id,
+                    "case_index": cell.case_index,
+                    "model_id": cell.model_id,
+                    "model_index": cell.model_index,
+                    "repetition_index": cell.repetition_index,
+                }
+                if any(existing[field] != value for field, value in identity.items()):
+                    raise ValueError("experiment cell identity is immutable")
+                for field in ("workspace_snapshot_id", "mission_id", "run_id"):
+                    previous = existing[field]
+                    current = getattr(cell, field)
+                    if previous is not None and str(current) != previous:
+                        raise ValueError("experiment cell mapping is immutable")
+            self._connection.execute(
+                """
+                INSERT OR REPLACE INTO experiment_cells(
+                    cell_id, experiment_id, case_id, case_index, model_id, model_index,
+                    repetition_index, workspace_snapshot_id, mission_id, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(cell.cell_id), str(cell.experiment_id), cell.case_id, cell.case_index,
+                    cell.model_id, cell.model_index, cell.repetition_index,
+                    str(cell.workspace_snapshot_id) if cell.workspace_snapshot_id else None,
+                    str(cell.mission_id) if cell.mission_id else None,
+                    str(cell.run_id) if cell.run_id else None,
+                ),
+            )
+
+    @staticmethod
+    def _experiment_cell(row) -> ExperimentCell:
+        return ExperimentCell(
+            cell_id=UUID(row["cell_id"]),
+            experiment_id=UUID(row["experiment_id"]),
+            case_id=row["case_id"],
+            case_index=row["case_index"],
+            model_id=row["model_id"],
+            model_index=row["model_index"],
+            repetition_index=row["repetition_index"],
+            workspace_snapshot_id=UUID(row["workspace_snapshot_id"]) if row["workspace_snapshot_id"] else None,
+            mission_id=UUID(row["mission_id"]) if row["mission_id"] else None,
+            run_id=UUID(row["run_id"]) if row["run_id"] else None,
+        )
+
+    def get_experiment_cell(self, cell_id: UUID) -> ExperimentCell | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM experiment_cells WHERE cell_id = ?", (str(cell_id),)
+            ).fetchone()
+        return self._experiment_cell(row) if row else None
+
+    def list_experiment_cells(self, experiment_id: UUID) -> list[ExperimentCell]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM experiment_cells WHERE experiment_id = ?
+                ORDER BY case_index ASC, model_index ASC, repetition_index ASC
+                """,
+                (str(experiment_id),),
+            ).fetchall()
+        return [self._experiment_cell(row) for row in rows]
 
     def finalize_run(self, result: MissionRunResult, events: list[TraceEvent]) -> None:
         """Commit the completed run and its append-only events together."""

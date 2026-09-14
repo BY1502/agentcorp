@@ -11,13 +11,13 @@ from .services.replay import ReplayService, RunNotFoundError
 from .services.metrics import RunMetricsService
 from .services.evaluation import RunEvaluationService
 from .services.aggregates import RunAggregateService
-from .services.experiments import ExperimentNotFoundError, ExperimentService
+from .services.experiments import ExperimentExecutionError, ExperimentExecutionService, ExperimentNotFoundError, ExperimentService
 from .domain.policy import PendingApproval
 from .domain.replay import ReplayInspection
 from .domain.metrics import RunMetrics
 from .domain.evaluation import RunEvaluation
 from .domain.aggregates import ModelAggregate, RunAggregate
-from .domain.experiments import Experiment, ExperimentSpec
+from .domain.experiments import Experiment, ExperimentRunView, ExperimentSpec
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
 
@@ -30,6 +30,7 @@ metrics=RunMetricsService(storage)
 evaluation=RunEvaluationService(storage, metrics)
 aggregates=RunAggregateService(storage, metrics, evaluation)
 experiments=ExperimentService(storage, runs.registry)
+experiment_execution=ExperimentExecutionService(storage, runs, experiments)
 @app.post('/missions', response_model=MissionResponse)
 def create_mission(request: MissionCreate):
     m=missions.create(request.title,request.fixture); return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
@@ -156,4 +157,22 @@ def seal_experiment(experiment_id: UUID):
     except UnknownModelError as error:
         raise HTTPException(404, str(error)) from error
     except DisabledModelError as error:
+        raise HTTPException(409, str(error)) from error
+
+@app.post('/experiments/{experiment_id}/execute', response_model=Experiment)
+def execute_experiment(experiment_id: UUID):
+    try:
+        return experiment_execution.execute(experiment_id)
+    except ExperimentNotFoundError as error:
+        raise HTTPException(404, 'experiment not found') from error
+    except ExperimentExecutionError as error:
+        raise HTTPException(409, str(error)) from error
+
+@app.get('/experiments/{experiment_id}/runs', response_model=list[ExperimentRunView])
+def get_experiment_runs(experiment_id: UUID):
+    try:
+        return experiment_execution.runs(experiment_id)
+    except ExperimentNotFoundError as error:
+        raise HTTPException(404, 'experiment not found') from error
+    except ExperimentExecutionError as error:
         raise HTTPException(409, str(error)) from error

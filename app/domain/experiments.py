@@ -46,6 +46,8 @@ def _portable_reference(value: str) -> str:
 class ExperimentStatus(StrEnum):
     DRAFT = "DRAFT"
     SEALED = "SEALED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
 
 
 class ExperimentCase(BaseModel):
@@ -146,3 +148,44 @@ class Experiment(ExperimentSpec):
 
     experiment_id: UUID = Field(default_factory=uuid4)
     status: ExperimentStatus = ExperimentStatus.DRAFT
+
+
+class ExperimentCell(BaseModel):
+    """The durable identity and Run association for one matrix cell."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cell_id: UUID
+    experiment_id: UUID
+    case_id: str
+    case_index: int
+    model_id: str
+    model_index: int
+    repetition_index: int
+    workspace_snapshot_id: UUID | None = None
+    mission_id: UUID | None = None
+    run_id: UUID | None = None
+
+    @field_validator("case_index", "model_index", "repetition_index")
+    @classmethod
+    def non_negative_index(cls, value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("matrix indexes must be non-negative integers")
+        return value
+
+
+class ExperimentRunView(BaseModel):
+    """Safe read model for an Experiment cell and its existing Run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cell_id: UUID
+    experiment_id: UUID
+    case_id: str
+    model_id: str
+    provider_type: str
+    model_name: str
+    repetition_index: int
+    mission_id: UUID | None = None
+    run_id: UUID | None = None
+    run_status: str

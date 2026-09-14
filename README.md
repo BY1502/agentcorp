@@ -39,7 +39,7 @@ agentcorp/
 ├── ARCHITECTURE.md  CONTRIBUTING.md  pyproject.toml  README.md
 ```
 
-의존성 방향은 `Mission → ExecutionManifest → MissionOrchestrator → AgentRuntime → ModelProvider / PromptCompiler / ToolExecutor → TraceRecorder → CheckpointManager → WorkspaceSnapshotManager`입니다. 도구 권한 검증 뒤 `PolicyEvaluator`가 ALLOW / DENY / REQUIRE_APPROVAL을 결정하고, pending approval은 `ApprovalStore`에 저장됩니다. 완료된 실행은 `Service → Repository Protocol → SQLiteStore`로 저장되며, Domain은 FastAPI, SQLite, SQLAlchemy, vendor SDK에 의존하지 않습니다.
+의존성 방향은 `Mission → ExecutionManifest → MissionOrchestrator → AgentRuntime → ModelProvider / PromptCompiler / ToolExecutor → TraceRecorder → CheckpointManager → WorkspaceSnapshotManager`이며, `Experiment → ExperimentCell → 기존 Mission/Run 경로`를 사용합니다. 도구 권한 검증 뒤 `PolicyEvaluator`가 ALLOW / DENY / REQUIRE_APPROVAL을 결정하고, pending approval은 `ApprovalStore`에 저장됩니다. 완료된 실행은 `Service → Repository Protocol → SQLiteStore`로 저장되며, Domain은 FastAPI, SQLite, SQLAlchemy, vendor SDK에 의존하지 않습니다.
 
 ## Skill 시스템
 
@@ -83,7 +83,7 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·evaluation·approval 조회·resume, `GET /analytics/runs`, `GET /analytics/models`, `POST /experiments`, `GET /experiments/{id}`, `POST /experiments/{id}/seal`을 제공합니다. Metrics, evaluation, aggregate analytics는 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool·LLM judge를 호출하거나 historical data를 변경하지 않습니다. Aggregate model group은 현재 registry가 아니라 frozen `ModelExecutionSnapshot`을 사용하며 base URL은 identity에서 제외합니다. Experiments는 동일 case·workspace reference·runtime/policy/skill 조건과 model references를 정의하며 create/seal은 모델·도구·mission을 실행하지 않습니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
+현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·evaluation·approval 조회·resume, `GET /analytics/runs`, `GET /analytics/models`, `POST /experiments`, `GET /experiments/{id}`, `POST /experiments/{id}/seal`, `POST /experiments/{id}/execute`, `GET /experiments/{id}/runs`를 제공합니다. Metrics, evaluation, aggregate analytics는 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool·LLM judge를 호출하거나 historical data를 변경하지 않습니다. Aggregate model group은 현재 registry가 아니라 frozen `ModelExecutionSnapshot`을 사용하며 base URL은 identity에서 제외합니다. Experiments는 동일 case·workspace reference·runtime/policy/skill 조건과 model references를 정의하고, sealed execution은 case × model × repetition을 기존 동기 Run 경로로 순차 실행합니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
 
 ## 테스트
 
@@ -92,6 +92,10 @@ uvicorn app.main:app --reload
 ## PHASE 9 Step 1
 
 `Experiment`는 동일한 mission case, portable workspace reference, 공통 runtime/policy/skill 조건에서 여러 model target과 repetition을 비교하기 위한 immutable specification입니다. `DRAFT`를 `SEALED`하면 registry의 model ID가 안전한 `ModelExecutionSnapshot`으로 원자적으로 freeze되며, experiment 생성·seal은 model/provider/tool/mission을 실행하지 않습니다.
+
+## PHASE 9 Step 2
+
+SEALED `Experiment`는 case 순서 → model 순서 → 0-based repetition 순서로 deterministic cell을 확장합니다. 각 cell은 deterministic `ExperimentCell`·Mission·Run ID와 case별 copy-based workspace seed를 가지며 기존 `RunService`/`BasicMissionOrchestrator`를 사용합니다. terminal Run은 재실행하지 않고, `WAITING_APPROVAL`은 experiment를 `RUNNING`으로 유지하며, 모든 cell이 terminal이면 Run 결과가 섞여도 experiment는 `COMPLETED`입니다. 병렬 실행·scheduler·rerun·experiment analytics는 아직 없습니다.
 
 ## 개발 로드맵
 

@@ -8,6 +8,7 @@ from app.domain.models import (
     TraceEvent,
     WorkspaceSnapshot,
 )
+from app.domain.experiments import ExperimentCell
 
 
 class MissionRepository(Protocol):
@@ -33,3 +34,9 @@ class CheckpointStore(Protocol):
 class WorkspaceSnapshotStore(Protocol):
     def save_workspace_snapshot(self, snapshot: WorkspaceSnapshot) -> None: ...
     def get_workspace_snapshot(self, snapshot_id: UUID) -> WorkspaceSnapshot | None: ...
+
+
+class ExperimentCellStore(Protocol):
+    def save_experiment_cell(self, cell: ExperimentCell) -> None: ...
+    def get_experiment_cell(self, cell_id: UUID) -> ExperimentCell | None: ...
+    def list_experiment_cells(self, experiment_id: UUID) -> list[ExperimentCell]: ...

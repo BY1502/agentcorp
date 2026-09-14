@@ -1,9 +1,10 @@
-from .contracts import CheckpointStore, EventStore, MissionRepository, RunRepository, WorkspaceSnapshotStore
+from .contracts import CheckpointStore, EventStore, ExperimentCellStore, MissionRepository, RunRepository, WorkspaceSnapshotStore
 from .sqlite import SQLiteStore
 
 __all__ = [
     "CheckpointStore",
     "EventStore",
+    "ExperimentCellStore",
     "MissionRepository",
     "RunRepository",
     "SQLiteStore",

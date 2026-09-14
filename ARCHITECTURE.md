@@ -67,6 +67,7 @@ All identifiers are UUIDs. Domain records use Pydantic models or frozen dataclas
 - **PolicyExecutionSnapshot**: immutable policy mode/version/rules/optional TTL frozen in the ExecutionManifest. It contains no credentials or secrets; resumed Runs reuse it rather than resolving current policy.
 - **PolicyDecision**: deterministic ALLOW, DENY, or REQUIRE_APPROVAL result for a proposed tool call. Permission checks remain a separate earlier gate.
 - **PendingApproval**: safe, persisted record containing a bounded `ToolCallSnapshot`, argument digest, policy identity/version, reason, `created_at`, server-owned `decided_at`, and terminal `ApprovalStatus` (`PENDING`, `APPROVED`, `REJECTED`, or `EXPIRED`).
+- **Experiment / ExperimentCell**: a sealed case × frozen model × 0-based repetition specification and its durable one-cell-to-one-Mission/Run mapping. Cells retain deterministic identity, canonical order, workspace seed reference, and Run IDs; Run status remains authoritative.
 
 Persistence may initially omit a standalone `roles`/`levels` table because these are closed v0.1 enums. They remain domain concepts and can become reference data when made configurable.
 
@@ -100,6 +101,9 @@ Mission -> ExecutionManifest -> MissionOrchestrator -> AgentRuntime
    |                                                        +--> TraceRecorder -> CheckpointManager -> WorkspaceSnapshotManager
    |
    +--> model_id -> ModelConfigRegistry -> ModelConfig -> ProviderFactory -> ModelProvider
+
+Experiment -> ExperimentCell -> Mission -> MissionRun -> ExecutionManifest
+                         \-> existing RunService / BasicMissionOrchestrator
 ```
 
 ## 5. Runtime and boundary rules
@@ -120,7 +124,7 @@ Tool paths are resolved beneath the assigned workspace root, then checked with `
 
 The application boundary is `Runtime/Service -> repository protocol -> persistent adapter`. v0.1 uses the standard-library SQLite adapter at `AGENTCORP_STORAGE_PATH` (default `data/agentcorp.db`); the in-memory adapter remains available for deterministic unit tests. SQLite is not imported by domain or runtime code.
 
-The adapter stores missions, run results, append-only trace events, checkpoint state, workspace-snapshot metadata, approvals, and experiment specifications. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 2. Run finalization writes the result and its events in one short transaction, while checkpoint, workspace, approval, and experiment metadata are committed at their safe boundaries. Approval decision state and its audit event use one local SQLite transaction; filesystem side effects remain outside that transaction.
+The adapter stores missions, run results, append-only trace events, checkpoint state, workspace-snapshot metadata, approvals, experiment specifications, and experiment-cell mappings. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 3. Run finalization writes the result and its events in one short transaction, while checkpoint, workspace, approval, and experiment metadata are committed at their safe boundaries. Experiment cell, Mission, and Run IDs are deterministic and persisted before execution so re-entry cannot create a second identity; the existing adapter does not require a cross-table transaction. Approval decision state and its audit event use one local SQLite transaction; filesystem side effects remain outside that transaction.
 
 Trace payloads, manifests, and checkpoint state are JSON-serializable only. No arbitrary Python object, API key, credential value, credential reference, raw provider request/response, or hidden reasoning is stored. Model records use a credential reference or runtime-resolved secret only before persistence. Historical run reads use the stored `ExecutionManifest` and `ModelExecutionSnapshot`; they never re-resolve mutable model configuration. Trace records are append-only.
 
@@ -139,6 +143,7 @@ Historical replay is a read-only inspection of persisted Run, Manifest, Events, 
 - `GET /runs/{id}/metrics`, `GET /runs/{id}/evaluation`
 - `GET /analytics/runs`, `GET /analytics/models`
 - `POST /experiments`, `GET /experiments/{id}`, `POST /experiments/{id}/seal`
+- `POST /experiments/{id}/execute`, `GET /experiments/{id}/runs`
 
 `POST /missions/{id}/runs` accepts an optional JSON body `{ "model_id": "..." }`. When omitted, the configured default model is selected. Unknown models return 404 and disabled models return 409; neither path silently falls back. The response exposes only the safe immutable model snapshot. Handlers remain thin and call services. Run creation initially executes synchronously to keep behavior easy to observe; background execution, streaming, and authentication are outside the first slice.
 
@@ -161,6 +166,7 @@ Tests cover deterministic skill loading/checksums, prompt ordering, traversal re
 PHASE 8 observability foundation adds read-only `RunMetricsService` and `RunEvaluationService`. Metrics and deterministic evaluation are derived on read from persisted run records; evaluation uses versioned code-owned rules and safe evidence references only. It does not call providers/tools, persist evaluation records, inspect workspace contents, or use an LLM judge.
 PHASE 8 Step 3 adds `RunAggregateService`, which derives whole-run and frozen-model-snapshot aggregate read models from `RunMetricsService` and `RunEvaluationService`. Runs remain independent (including resumed children), ordering is deterministic, and no aggregate persistence, model ranking, composite score, provider/tool call, or current-registry resolution is introduced.
 PHASE 9 Step 1 adds persisted `Experiment` specifications with `DRAFT` and `SEALED` states. A seal resolves every referenced model ID through the registry into safe immutable `ModelExecutionSnapshot` values atomically; it does not create Runs or call providers/tools. Cases, repetition count, common runtime/policy settings, and optional SkillVersion snapshots are frozen for the later matrix executor. Sealed definitions are returned unchanged after registry drift.
+PHASE 9 Step 2 adds deterministic sequential matrix execution. A SEALED experiment expands in case order → model order → 0-based repetition order, seeds each case once into a copy-based `WorkspaceSnapshot`, and routes each cell through the existing `MissionRecord`/`RunService`/`BasicMissionOrchestrator` path. Cell, Mission, and Run identities are restart-safe; terminal Runs are skipped, `WAITING_APPROVAL` remains non-terminal, and all-terminal cells produce `COMPLETED` regardless of individual Run PASS/FAIL. No registry re-resolution, automatic rerun, approval bypass, scheduler, parallelism, or experiment analytics is introduced.
 - Full checkpoint branching UX; v0.1 provides serializable state and a local copy-based fork seam.
 - PostgreSQL deployment, migrations beyond basic setup, multi-process workers, queues, Redis, Celery, Docker Compose, Kubernetes, and microservices.
 - Arbitrary shell execution, unrestricted tools, browser/network tools, and long-running async orchestration.
