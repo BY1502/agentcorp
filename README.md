@@ -51,7 +51,7 @@ Model은 intelligence, Role은 직무, Level은 seniority behavior, Skill은 reu
 
 ## Trace / Blackbox
 
-초기 이벤트는 `mission_started`, `agent_started`, `prompt_compiled`, `model_request`, `model_response`, `tool_call`, `tool_result`, `handoff_created`, `checkpoint_created`, `validation_error`, `runtime_error`, `agent_finished`, `mission_finished`입니다. 관찰 가능한 request/response, tool, validation, latency, usage, handoff, error만 저장하며 private chain-of-thought와 secret은 저장하지 않습니다. TraceEvent는 observation이고 Checkpoint는 restorable state입니다.
+초기 이벤트는 `mission_started`, `agent_started`, `prompt_compiled`, `model_request`, `model_response`, `tool_call`, `tool_result`, `handoff_created`, `checkpoint_created`, `approval_required`, `approval_approved`, `approval_rejected`, `approval_expired`, `approval_stale`, `validation_error`, `runtime_error`, `agent_finished`, `mission_finished`입니다. 관찰 가능한 request/response, tool, validation, latency, usage, handoff, error만 저장하며 private chain-of-thought와 secret은 저장하지 않습니다. TraceEvent는 observation이고 Checkpoint는 restorable state입니다.
 
 ## Checkpoint / Replay / Resume
 
@@ -59,8 +59,8 @@ Checkpoint는 runtime state, handoff state, model assignment, SkillVersion snaps
 
 `POST /runs/{id}/resume`는 FAILED/EXHAUSTED run의 지원되는 handoff checkpoint에서 새 Run을 만듭니다. PM handoff는 Developer부터, Developer handoff는 QA부터 재개하며 저장된 WorkspaceSnapshot을 새 workspace에 복원합니다. 부모 Run과 workspace는 변경하지 않고 저장된 ExecutionManifest·model snapshot·SkillVersion snapshot을 사용합니다. Replay는 읽기 전용 inspection이고, Resume은 실행이며, Rerun은 처음부터 시작합니다.
 
-`approval_mode=disabled`가 기본값이며 기존 자동 도구 실행을 보존합니다. `policy` 모드에서는 읽기 전용 도구를 자동 허용하고 `edit_file`을 `WAITING_APPROVAL`로 일시정지합니다. `POST /approvals/{id}/approve`는 저장된 exact `ToolCallSnapshot`을 digest 검증 후 같은 Run에서 실행하고 AgentState의 대화를 이어갑니다. `POST /approvals/{id}/reject`는 도구 실행·recovery 없이 같은 Run을 FAILED로 종료합니다. PHASE 6 Resume은 새 Run을 만들며 approval continuation은 새 Run을 만들지 않습니다.
-승인 상태는 `PENDING → APPROVED` 또는 `PENDING → REJECTED` 한 번만 전이합니다. 재시작 후에도 suspension checkpoint의 AgentState, workspace snapshot, skill snapshot, frozen manifest로 continuation하며, 승인된 tool call은 다시 모델에게 생성시키지 않습니다. 승인/거절 race는 SQLite compare-and-set 전이로 한 요청만 성공합니다.
+`approval_mode=disabled`가 기본값이며 기존 자동 도구 실행을 보존합니다. `policy` 모드에서는 읽기 전용 도구를 자동 허용하고 `edit_file`을 `WAITING_APPROVAL`로 일시정지합니다. `POST /approvals/{id}/approve`는 Run/checkpoint/workspace ownership과 저장된 exact `ToolCallSnapshot` 및 policy snapshot을 검증한 뒤 같은 Run에서 실행하고 AgentState의 대화를 이어갑니다. stale workspace는 자동 복원하지 않고 `approval_stale` safe failure로 종료합니다. `POST /approvals/{id}/reject`는 도구 실행·recovery 없이 같은 Run을 FAILED로 종료합니다. PHASE 6 Resume은 새 Run을 만들며 approval continuation은 새 Run을 만들지 않습니다.
+승인 상태는 `PENDING → APPROVED`, `PENDING → REJECTED`, 또는 선택적 TTL에 따른 `PENDING → EXPIRED` 한 번만 전이합니다. `created_at`은 생성 시각이고 `decided_at`은 서버가 기록하는 결정 시각입니다. 정책 mode/version/rules와 optional TTL은 Run manifest에 고정되며 resumed Run도 이를 재사용합니다. 재시작 후에도 suspension checkpoint의 AgentState, workspace snapshot, skill snapshot, frozen manifest로 continuation하며, 승인된 tool call은 다시 모델에게 생성시키지 않습니다. 승인 decision과 audit event는 SQLite local transaction으로 함께 저장하고, replay는 ordering·duplicate execution·ambiguous approved execution을 검사합니다.
 
 ## v0.1 범위
 

@@ -192,7 +192,7 @@ class BasicMissionOrchestrator:
         policy_evaluator = self.policy_evaluator or PolicyEvaluator(
             mode=(manifest.policy_snapshot.mode if manifest.policy_snapshot else manifest.runtime_config.get("approval_mode", "disabled")),
             policy_version=(manifest.policy_snapshot.policy_version if manifest.policy_snapshot else manifest.runtime_config.get("policy_version", "1")),
-            rules=manifest.runtime_config.get("policy_rules"),
+            rules=(dict(manifest.policy_snapshot.rules) if manifest.policy_snapshot else manifest.runtime_config.get("policy_rules")),
         )
 
         def approval_handler(approval: PendingApproval, state: AgentState):

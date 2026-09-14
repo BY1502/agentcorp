@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -157,6 +158,12 @@ class SQLiteStore:
 
     def save_approval(self, approval: PendingApproval) -> None:
         with self._lock, self._connection:
+            if approval.status == "PENDING":
+                rows = self._connection.execute(
+                    "SELECT approval_json FROM approvals WHERE run_id = ?", (str(approval.run_id),)
+                ).fetchall()
+                if any(PendingApproval.model_validate(json.loads(row["approval_json"])).status == "PENDING" for row in rows):
+                    raise ValueError("run already has a pending approval")
             self._connection.execute(
                 "INSERT OR REPLACE INTO approvals(approval_id, run_id, approval_json) VALUES (?, ?, ?)",
                 (str(approval.approval_id), str(approval.run_id), _json(approval)),
@@ -178,7 +185,7 @@ class SQLiteStore:
         return sorted(approvals, key=lambda approval: (approval.created_at, approval.approval_id))
 
     def transition_approval(self, approval_id: UUID, expected_status: str, new_status: str, decision_reason: str | None = None):
-        if expected_status != "PENDING" or new_status not in {"APPROVED", "REJECTED"}:
+        if expected_status != "PENDING" or new_status not in {"APPROVED", "REJECTED", "EXPIRED"}:
             return None
         with self._lock, self._connection:
             row = self._connection.execute(
@@ -190,12 +197,57 @@ class SQLiteStore:
             approval = PendingApproval.model_validate(json.loads(current_json))
             if approval.status != expected_status:
                 return None
-            updated = approval.model_copy(update={"status": new_status, "decision_reason": decision_reason})
+            updated = PendingApproval.model_validate({
+                **approval.model_dump(mode="json"),
+                "status": str(new_status),
+                "decision_reason": decision_reason,
+                "decided_at": datetime.now(timezone.utc),
+            })
             cursor = self._connection.execute(
                 "UPDATE approvals SET approval_json = ? WHERE approval_id = ? AND approval_json = ?",
                 (_json(updated), str(approval_id), current_json),
             )
             return updated if cursor.rowcount == 1 else None
+
+    def transition_approval_with_event(
+        self,
+        approval_id: UUID,
+        expected_status: str,
+        new_status: str,
+        event: TraceEvent,
+        decision_reason: str | None = None,
+    ):
+        if expected_status != "PENDING" or new_status not in {"APPROVED", "REJECTED", "EXPIRED"}:
+            return None
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT approval_json FROM approvals WHERE approval_id = ?", (str(approval_id),)
+            ).fetchone()
+            if row is None:
+                return None
+            current_json = row["approval_json"]
+            approval = PendingApproval.model_validate(json.loads(current_json))
+            if approval.status != expected_status:
+                return None
+            if event.mission_run_id != approval.run_id:
+                return None
+            updated = PendingApproval.model_validate({
+                **approval.model_dump(mode="json"),
+                "status": str(new_status),
+                "decision_reason": decision_reason,
+                "decided_at": datetime.now(timezone.utc),
+            })
+            cursor = self._connection.execute(
+                "UPDATE approvals SET approval_json = ? WHERE approval_id = ? AND approval_json = ?",
+                (_json(updated), str(approval_id), current_json),
+            )
+            if cursor.rowcount != 1:
+                return None
+            self._connection.execute(
+                "INSERT INTO events(id, mission_run_id, sequence, event_json) VALUES (?, ?, ?, ?)",
+                (str(event.id), str(event.mission_run_id), event.sequence, _json(event)),
+            )
+            return updated
 
     def append_events(self, events: list[TraceEvent]) -> None:
         with self._lock, self._connection:

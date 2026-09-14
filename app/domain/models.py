@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 from enum import StrEnum
+from math import isfinite
 from typing import Any
 from uuid import UUID, uuid4
 from urllib.parse import urlsplit, urlunsplit
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic import field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 def now() -> datetime: return datetime.now(timezone.utc)
 
@@ -110,6 +110,7 @@ class WorkspaceSnapshot(BaseModel):
     source_workspace: str
     location: str
     created_at: datetime = Field(default_factory=now)
+    mission_run_id: UUID | None = None
 
 class CheckpointState(BaseModel):
     mission_run_id: UUID
@@ -124,6 +125,29 @@ class PolicyExecutionSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
     mode: str = "disabled"
     policy_version: str = "1"
+    rules: tuple[tuple[str, str], ...] = ()
+    approval_ttl_seconds: float | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def valid_mode(cls, value):
+        if value not in {"disabled", "policy"}:
+            raise ValueError(f"unknown approval mode: {value}")
+        return value
+
+    @field_validator("policy_version")
+    @classmethod
+    def valid_version(cls, value):
+        if not str(value).isdigit() or int(value) <= 0:
+            raise ValueError("policy_version must be a positive integer string")
+        return str(value)
+
+    @field_validator("approval_ttl_seconds")
+    @classmethod
+    def valid_ttl(cls, value):
+        if value is not None and (not isfinite(value) or value < 0):
+            raise ValueError("approval_ttl_seconds must be non-negative")
+        return value
 
 class ExecutionManifest(BaseModel):
     model_config = ConfigDict(frozen=True)

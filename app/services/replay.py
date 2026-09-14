@@ -137,7 +137,11 @@ def _tools(events: list[TraceEvent], roles, attempts):
 
 
 def _snapshot_inspection(snapshot_id: UUID, storage, issues: list[str]):
-    snapshot = storage.get_workspace_snapshot(snapshot_id)
+    try:
+        snapshot = storage.get_workspace_snapshot(snapshot_id)
+    except Exception:
+        issues.append(f"workspace_snapshot_corrupted:{snapshot_id}")
+        return WorkspaceSnapshotInspection(snapshot_id=snapshot_id)
     if snapshot is None:
         issues.append(f"workspace_snapshot_missing:{snapshot_id}")
         return None
@@ -166,11 +170,29 @@ def _checkpoints(result, events, storage, issues):
     }
     records = []
     for checkpoint_id in result.checkpoint_ids:
-        state = storage.get_checkpoint(checkpoint_id)
+        try:
+            state = storage.get_checkpoint(checkpoint_id)
+        except Exception:
+            issues.append(f"checkpoint_corrupted:{checkpoint_id}")
+            records.append(CheckpointInspection(checkpoint_id=checkpoint_id))
+            continue
         if state is None:
             issues.append(f"checkpoint_missing:{checkpoint_id}")
             records.append(CheckpointInspection(checkpoint_id=checkpoint_id))
             continue
+        if state.mission_run_id != result.mission_run_id or (
+            state.agent_state.mission_run_id and state.agent_state.mission_run_id != result.mission_run_id
+        ):
+            issues.append(f"checkpoint_ownership_mismatch:{checkpoint_id}")
+        try:
+            snapshot = storage.get_workspace_snapshot(state.workspace_snapshot_id)
+        except Exception:
+            snapshot = None
+            issues.append(f"workspace_snapshot_corrupted:{state.workspace_snapshot_id}")
+        if snapshot and snapshot.mission_run_id and snapshot.mission_run_id != result.mission_run_id:
+            issues.append(f"workspace_snapshot_ownership_mismatch:{state.workspace_snapshot_id}")
+        if snapshot and Path(snapshot.source_workspace).resolve() != Path(result.workspace_reference).resolve():
+            issues.append(f"workspace_snapshot_lineage_mismatch:{state.workspace_snapshot_id}")
         records.append(
             CheckpointInspection(
                 checkpoint_id=checkpoint_id,
@@ -188,6 +210,98 @@ def _checkpoints(result, events, storage, issues):
     if not valid:
         issues.append("checkpoint_order_invalid")
     return records, valid
+
+
+def _approval_audit(approvals, events, run_id, issues):
+    by_id = {}
+    for event in events:
+        approval_id = event.payload.get("approval_id")
+        if approval_id:
+            by_id.setdefault(str(approval_id), {}).setdefault(event.event_type, []).append(event)
+
+    approval_issues_before = len(issues)
+    for approval in approvals:
+        approval_id = str(approval.approval_id)
+        if approval.run_id != run_id:
+            issues.append(f"approval_run_ownership_mismatch:{approval_id}")
+        if not approval.policy_id or not approval.policy_version:
+            issues.append(f"approval_policy_metadata_missing:{approval_id}")
+        audit = by_id.get(approval_id, {})
+        required = audit.get("approval_required", [])
+        if len(required) != 1:
+            issues.append(f"approval_required_missing_or_duplicate:{approval_id}")
+            continue
+        required_event = required[0]
+        required_payload = required_event.payload
+        if any(required_payload.get(key) != value for key, value in {
+            "policy_id": approval.policy_id,
+            "policy_version": approval.policy_version,
+            "tool_name": approval.tool_name,
+            "arguments_digest": approval.arguments_digest,
+            "call_id": approval.call_id,
+        }.items()):
+            issues.append(f"approval_required_snapshot_mismatch:{approval_id}")
+
+        decision_types = {
+            "APPROVED": "approval_approved",
+            "REJECTED": "approval_rejected",
+            "EXPIRED": "approval_expired",
+        }
+        decision_type = decision_types.get(str(approval.status))
+        decision_events = audit.get(decision_type, []) if decision_type else []
+        if decision_type and len(decision_events) != 1:
+            issues.append(f"approval_decision_missing_or_duplicate:{approval_id}")
+        for event_type in ("approval_approved", "approval_rejected", "approval_expired"):
+            if event_type != decision_type and audit.get(event_type):
+                issues.append(f"approval_unexpected_decision:{approval_id}")
+        if decision_events:
+            decision_event = decision_events[0]
+            if decision_event.sequence <= required_event.sequence:
+                issues.append(f"approval_decision_order_invalid:{approval_id}")
+            if any(decision_event.payload.get(key) != value for key, value in {
+                "policy_id": approval.policy_id,
+                "policy_version": approval.policy_version,
+                "tool_name": approval.tool_name,
+                "arguments_digest": approval.arguments_digest,
+                "call_id": approval.call_id,
+            }.items()):
+                issues.append(f"approval_decision_snapshot_mismatch:{approval_id}")
+
+        tool_results = [
+            event for event in events
+            if event.event_type == "tool_result"
+            and (
+                event.payload.get("approval_id") == approval_id
+                or event.payload.get("tool_name") == approval.tool_name
+                and (
+                    event.payload.get("call_id") == approval.call_id
+                    or event.payload.get("arguments_digest") == approval.arguments_digest
+                )
+            )
+        ]
+        if str(approval.status) == "APPROVED":
+            if len(tool_results) > 1:
+                issues.append(f"approval_duplicate_tool_result:{approval_id}")
+            if not tool_results:
+                issues.append(f"approval_execution_uncertain:{approval_id}")
+            elif decision_events and tool_results[0].sequence <= decision_events[0].sequence:
+                issues.append(f"approval_tool_order_invalid:{approval_id}")
+        elif str(approval.status) in {"REJECTED", "EXPIRED"} and tool_results:
+            issues.append(f"approval_tool_executed_after_{str(approval.status).lower()}:{approval_id}")
+        if decision_events and str(approval.status) in {"REJECTED", "EXPIRED"}:
+            final_events = [event for event in events if event.event_type == "mission_finished"]
+            if final_events and final_events[-1].sequence <= decision_events[0].sequence:
+                issues.append(f"approval_terminal_order_invalid:{approval_id}")
+
+    summary = {
+        "total": len(approvals),
+        "pending": sum(str(item.status) == "PENDING" for item in approvals),
+        "approved": sum(str(item.status) == "APPROVED" for item in approvals),
+        "rejected": sum(str(item.status) == "REJECTED" for item in approvals),
+        "expired": sum(str(item.status) == "EXPIRED" for item in approvals),
+        "integrity_valid": len(issues) == approval_issues_before,
+    }
+    return summary
 
 
 class ReplayService:
@@ -262,16 +376,23 @@ class ReplayService:
                     run_id=approval.run_id,
                     agent_role=approval.agent_role.value,
                     tool_name=approval.tool_call.tool_name,
+                    call_id=approval.tool_call.call_id,
                     arguments_digest=approval.tool_call.arguments_digest,
                     policy_id=approval.policy_id,
+                    policy_version=approval.policy_version,
                     reason=approval.reason,
                     status=approval.status,
+                    created_at=approval.created_at,
+                    decided_at=approval.decided_at,
                 )
                 for approval in self.storage.list_approvals(run_id)
             ]
         except Exception:
             issues.append("approval_corrupted")
             approvals = []
+        approval_summary = _approval_audit(approvals, events, result.mission_run_id, issues)
+        if "approval_corrupted" in issues:
+            approval_summary["integrity_valid"] = False
         return ReplayInspection(
             run_id=result.mission_run_id,
             mission_id=result.mission_id,
@@ -280,6 +401,7 @@ class ReplayService:
             resumed_from_checkpoint_id=result.resumed_from_checkpoint_id,
             execution_manifest=manifest,
             approvals=approvals,
+            approval_summary=approval_summary,
             timeline=timeline,
             agent_summary=agent_summary,
             tool_summary=tools,
@@ -294,12 +416,13 @@ class ReplayService:
             integrity=ReplayIntegrity(
                 event_sequence_valid=not any(
                     issue in issues
-                    for issue in ("event_sequence_duplicate", "event_sequence_out_of_order")
+                    for issue in ("event_sequence_duplicate", "event_sequence_out_of_order", "event_sequence_gap")
                 ),
                 checkpoint_order_valid=checkpoint_order_valid,
                 manifest_present=result.execution_manifest is not None,
                 final_event_present=final_event is not None,
                 status_consistent=status_consistent,
+                approval_integrity_valid=approval_summary["integrity_valid"],
             ),
             consistency_issues=issues,
         )

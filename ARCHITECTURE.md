@@ -61,12 +61,12 @@ All identifiers are UUIDs. Domain records use Pydantic models or frozen dataclas
 - **AgentRun**: one employee's execution inside a MissionRun, with role, level, model identity, status, and compiled skill snapshot references.
 - **TraceEvent**: immutable ordered observable event. Fields: id, mission ID, run ID, optional agent-run ID, sequence, event type, timestamp, payload, and metadata.
 - **CheckpointState**: explicit serializable continuation state: mission/run status, current agent and step, validated messages/handoffs, required tool results, assignment metadata, and exact skill versions. It has a `workspace_snapshot_id` reference, not filesystem contents.
-- **WorkspaceSnapshot**: independent filesystem state representation. In v0.1 it may be a copied directory. `WorkspaceSnapshotManager` owns creation and restoration.
+- **WorkspaceSnapshot**: independent filesystem state representation with source/Run lineage when available. In v0.1 it may be a copied directory. `WorkspaceSnapshotManager` owns creation and restoration.
 - **Checkpoint**: restorable record combining checkpoint metadata, CheckpointState, and its WorkspaceSnapshot reference.
 - **ForkRun**: a new MissionRun derived from a checkpoint, recording replacement model, level, or skills and its parent checkpoint.
-- **PolicyExecutionSnapshot**: immutable policy mode/version frozen in the ExecutionManifest. It contains no credentials or secrets.
+- **PolicyExecutionSnapshot**: immutable policy mode/version/rules/optional TTL frozen in the ExecutionManifest. It contains no credentials or secrets; resumed Runs reuse it rather than resolving current policy.
 - **PolicyDecision**: deterministic ALLOW, DENY, or REQUIRE_APPROVAL result for a proposed tool call. Permission checks remain a separate earlier gate.
-- **PendingApproval**: safe, persisted record containing a bounded `ToolCallSnapshot`, argument digest, policy identity, reason, and terminal `ApprovalStatus` (`PENDING`, `APPROVED`, or `REJECTED`).
+- **PendingApproval**: safe, persisted record containing a bounded `ToolCallSnapshot`, argument digest, policy identity/version, reason, `created_at`, server-owned `decided_at`, and terminal `ApprovalStatus` (`PENDING`, `APPROVED`, `REJECTED`, or `EXPIRED`).
 
 Persistence may initially omit a standalone `roles`/`levels` table because these are closed v0.1 enums. They remain domain concepts and can become reference data when made configurable.
 
@@ -87,7 +87,7 @@ The following protocols define seams without forcing infrastructure into the dom
 - `AgentRuntime.continue_approved(agent_run, state, approval) -> AgentResult`: reconstructs one paused AgentRun, validates and executes its persisted approved `ToolCallSnapshot`, then continues the same model conversation without policy re-evaluation or tool-call regeneration.
 - `MissionOrchestrator.run(mission, manifest) -> MissionResult`: invokes AgentRuntime for PM, Developer, and QA, applies bounded retries, creates handoff/ownership-boundary checkpoints, and completes the MissionRun.
 - `PolicyEvaluator.evaluate(role, tool_call) -> PolicyDecision`: provider-free deterministic policy evaluation after tool permission validation.
-- `ApprovalStore.save/get/list`: persists safe pending approvals without executing or approving them.
+- `ApprovalStore.save/get/list/transition`: persists safe approvals without executing them; decision transition and its audit event are committed together by the local adapter.
 
 The application resolves `model_id` to `ModelConfig`, creates one provider through `ProviderFactory`, and freezes the safe model snapshot into `ExecutionManifest` before orchestration. PM, Developer, and QA therefore share the provider selected for that run; the registry is not consulted again during the run. SQLAlchemy repositories, filesystem skill loading, HTTP model adapters, and the fake provider implement the contracts. Dependency direction:
 
@@ -108,6 +108,8 @@ The runtime is a small state machine, not a framework graph. Every observable ex
 
 Permission validation answers whether an agent may request a registered tool; policy evaluation then decides whether that permitted request is automatic, denied, or paused for approval. The default `approval_mode=disabled` preserves automatic tool execution. In `policy` mode, read-only tools are allowed, `edit_file` requires approval, and deterministic rules may deny a tool. A REQUIRE_APPROVAL decision persists a PendingApproval and checkpoint, emits `approval_required`, leaves the run in nonterminal `WAITING_APPROVAL`, and does not execute the tool or emit `mission_finished`. Approval decisions are handled by the separate same-Run continuation path below.
 
+Policy mode is fail-closed: evaluator errors and approval persistence errors stop the AgentRun without invoking the ToolExecutor. Unknown tools in policy mode are denied. `approval_required`, decision, expiry, and stale events carry only bounded audit metadata; they never carry executable arguments, raw provider responses, or reasoning.
+
 `TraceEvent` is an immutable observation. `Checkpoint` is restorable state. They are related by IDs and sequence context, but are not equivalent.
 
 PM output becomes a validated `PMToDeveloperHandoff`; Developer output becomes `DeveloperToQAHandoff`; QA output becomes `QAResult`. Invalid structured output emits `validation_error` and follows an explicit failure policy.
@@ -118,7 +120,7 @@ Tool paths are resolved beneath the assigned workspace root, then checked with `
 
 The application boundary is `Runtime/Service -> repository protocol -> persistent adapter`. v0.1 uses the standard-library SQLite adapter at `AGENTCORP_STORAGE_PATH` (default `data/agentcorp.db`); the in-memory adapter remains available for deterministic unit tests. SQLite is not imported by domain or runtime code.
 
-The adapter stores missions, run results, append-only trace events, checkpoint state, workspace-snapshot metadata, and pending approvals. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 1. Run finalization writes the result and its events in one short transaction, while checkpoint, workspace, and approval metadata are committed at their safe boundaries.
+The adapter stores missions, run results, append-only trace events, checkpoint state, workspace-snapshot metadata, and approvals. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 1. Run finalization writes the result and its events in one short transaction, while checkpoint, workspace, and approval metadata are committed at their safe boundaries. Approval decision state and its audit event use one local SQLite transaction; filesystem side effects remain outside that transaction.
 
 Trace payloads, manifests, and checkpoint state are JSON-serializable only. No arbitrary Python object, API key, credential value, credential reference, raw provider request/response, or hidden reasoning is stored. Model records use a credential reference or runtime-resolved secret only before persistence. Historical run reads use the stored `ExecutionManifest` and `ModelExecutionSnapshot`; they never re-resolve mutable model configuration. Trace records are append-only.
 
@@ -139,9 +141,9 @@ Historical replay is a read-only inspection of persisted Run, Manifest, Events, 
 
 `POST /runs/{id}/resume` accepts a checkpoint ID and only resumes FAILED/EXHAUSTED runs at supported handoff boundaries: PM handoff resumes at Developer and Developer handoff resumes at QA. It reconstructs the provider from the persisted model snapshot and compiles from immutable checkpoint SkillVersion snapshots; it does not consult the mutable model registry or current Markdown files.
 
-`WAITING_APPROVAL` is intentionally not accepted by the generic resume endpoint. Step 1 can inspect its persisted pending approval and replay timeline, while same-run approval continuation is reserved for the next policy step.
+`WAITING_APPROVAL` is intentionally not accepted by the generic resume endpoint. Step 1 can inspect its persisted pending approval and replay timeline, while same-run approval continuation is handled by the approval decision path.
 
-Approval continuation is a separate same-Run transition: `POST /approvals/{id}/approve` atomically claims the PENDING decision, verifies the persisted `ToolCallSnapshot` digest and workspace suspension snapshot, then executes that exact call and continues the persisted AgentState. The model is not asked to regenerate the approved tool call. Reject atomically transitions to REJECTED, records `approval_rejected`, emits terminal FAILED, executes no tool, and starts no recovery. Repeated or competing decisions receive conflict semantics; no client-supplied executable arguments are accepted. A resumed Run keeps its Phase 6 lineage while approval continuation still uses that resumed Run ID.
+Approval continuation is a separate same-Run transition: `POST /approvals/{id}/approve` verifies Run/checkpoint/snapshot ownership, policy snapshot/version, the persisted `ToolCallSnapshot` digest, and the workspace suspension snapshot before atomically claiming the PENDING decision. It then executes that exact call and continues the persisted AgentState; the model is not asked to regenerate it. A workspace mismatch is stale and is terminally recorded as `approval_stale` without tool execution or automatic restore. Reject atomically transitions to REJECTED, records `approval_rejected`, emits terminal FAILED, executes no tool, and starts no recovery. Optional approval TTL is disabled by default; expiry is lazy, transitions to EXPIRED, and terminally fails the Run without executing the tool. Repeated or competing decisions receive conflict semantics; no client-supplied executable arguments are accepted. A resumed Run keeps its Phase 6 lineage while approval continuation still uses that resumed Run ID. If a process fails after an APPROVED decision but before a tool result, replay reports an uncertain execution rather than silently retrying a generic side effect.
 
 ## 8. Testing strategy
 

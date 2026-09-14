@@ -38,6 +38,8 @@ def start_run(mission_id: UUID, request: RunCreate | None = None):
         raise HTTPException(404, str(error)) from error
     except DisabledModelError as error:
         raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
     return run_response(result)
 @app.get('/runs/{run_id}', response_model=RunResponse)
 def get_run(run_id: UUID):

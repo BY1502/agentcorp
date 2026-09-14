@@ -8,9 +8,15 @@ class LocalWorkspaceSnapshotManager:
         self.root = root
         self.snapshots = {}
         self.snapshot_store = snapshot_store
-    def create(self, workspace: Path):
-        sid=uuid4(); dest=self.root/"snapshots"/str(sid); dest.parent.mkdir(parents=True,exist_ok=True); shutil.copytree(workspace,dest)
-        snap=WorkspaceSnapshot(id=sid,source_workspace=str(workspace),location=str(dest)); self.snapshots[sid]=snap
+    def create(self, workspace: Path, mission_run_id: UUID | None = None):
+        sid=uuid4()
+        if mission_run_id is None:
+            try:
+                mission_run_id = UUID(workspace.name)
+            except ValueError:
+                pass
+        dest=self.root/"snapshots"/str(sid); dest.parent.mkdir(parents=True,exist_ok=True); shutil.copytree(workspace,dest)
+        snap=WorkspaceSnapshot(id=sid,source_workspace=str(workspace),location=str(dest),mission_run_id=mission_run_id); self.snapshots[sid]=snap
         if self.snapshot_store:
             self.snapshot_store.save_workspace_snapshot(snap)
         return snap

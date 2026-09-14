@@ -3,15 +3,15 @@ from uuid import UUID
 from app.domain.models import TraceEvent
 from typing import Any
 
-SENSITIVE = {"api_key","authorization","access_token","refresh_token","password","secret","credential"}
-SECRET_TEXT = re.compile(r"(?i)\b(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|password|secret|credential)\s*[:=]\s*[^\s,;]+")
+SENSITIVE = {"api_key","authorization","access_token","refresh_token","password","secret","credential","credential_ref","reasoning","reasoning_content","raw_request","raw_response","provider_request","provider_response","chain_of_thought"}
+SECRET_TEXT = re.compile(r"(?i)\b(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|password|secret|credential|reasoning(?:[_-]?content)?)\s*[:=]\s*[^\s,;]+")
 BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
 
 def sanitize_text(value: str) -> str:
     return BEARER.sub("Bearer [REDACTED]", SECRET_TEXT.sub(r"\1=[REDACTED]", value))
 
 def sanitize(value: Any):
-    if isinstance(value, dict): return {k: "[REDACTED]" if k.lower() in SENSITIVE else sanitize(v) for k,v in value.items()}
+    if isinstance(value, dict): return {k: "[REDACTED]" if str(k).lower() in SENSITIVE else sanitize(v) for k,v in value.items()}
     if isinstance(value, list): return [sanitize(v) for v in value]
     if isinstance(value, tuple): return tuple(sanitize(v) for v in value)
     if isinstance(value, str): return sanitize_text(value)

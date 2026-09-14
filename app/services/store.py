@@ -1,6 +1,7 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
-from app.domain.models import MissionRecord
+from app.domain.models import MissionRecord, TraceEvent
 
 __all__ = ["AppStore", "MissionRecord", "store"]
 
@@ -41,12 +42,27 @@ class AppStore:
         return approval.model_copy(deep=True) if approval else None
     def list_approvals(self, run_id): return sorted((approval.model_copy(deep=True) for approval in self.approvals.values() if approval.run_id == run_id), key=lambda approval: (approval.created_at, approval.approval_id))
     def transition_approval(self, approval_id, expected_status, new_status, decision_reason=None):
-        if expected_status != "PENDING" or new_status not in {"APPROVED", "REJECTED"}: return None
+        if expected_status != "PENDING" or new_status not in {"APPROVED", "REJECTED", "EXPIRED"}: return None
         approval = self.approvals.get(approval_id)
         if approval is None or approval.status != expected_status: return None
-        updated = approval.model_copy(update={"status": new_status, "decision_reason": decision_reason})
+        updated = approval.model_validate({**approval.model_dump(mode="json"), "status": str(new_status), "decision_reason": decision_reason, "decided_at": datetime.now(timezone.utc)})
         self.approvals[approval_id] = updated
         return updated.model_copy(deep=True)
+
+    def transition_approval_with_event(self, approval_id, expected_status, new_status, event: TraceEvent, decision_reason=None):
+        previous = self.approvals.get(approval_id)
+        if previous is None or event.mission_run_id != previous.run_id:
+            return None
+        updated = self.transition_approval(approval_id, expected_status, new_status, decision_reason)
+        if updated is None:
+            return None
+        try:
+            self.append_events([event])
+        except Exception:
+            if previous is not None:
+                self.approvals[approval_id] = previous
+            raise
+        return updated
 
     def close(self): pass
 store=AppStore()

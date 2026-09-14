@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -57,6 +58,10 @@ class ApprovalInspection(BaseModel):
     policy_id: str
     reason: str
     status: str
+    call_id: str = ""
+    policy_version: str = "1"
+    created_at: datetime | None = None
+    decided_at: datetime | None = None
 
 
 class ReplayIntegrity(BaseModel):
@@ -65,6 +70,7 @@ class ReplayIntegrity(BaseModel):
     manifest_present: bool
     final_event_present: bool
     status_consistent: bool
+    approval_integrity_valid: bool = True
 
 
 class ReplayInspection(BaseModel):
@@ -75,6 +81,7 @@ class ReplayInspection(BaseModel):
     resumed_from_checkpoint_id: UUID | None = None
     execution_manifest: ExecutionManifest
     approvals: list[ApprovalInspection] = Field(default_factory=list)
+    approval_summary: dict[str, object] = Field(default_factory=dict)
     timeline: list[ReplayTimelineItem] = Field(default_factory=list)
     agent_summary: dict[str, dict[str, int]] = Field(default_factory=dict)
     tool_summary: list[ToolInspection] = Field(default_factory=list)

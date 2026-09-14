@@ -51,13 +51,25 @@ class BasicAgentRuntime:
             }],
         })
 
-    def _execute_tool(self, agent_run_id: UUID, state: AgentState, call: ToolCall, append_assistant: bool = True) -> None:
+    def _execute_tool(
+        self,
+        agent_run_id: UUID,
+        state: AgentState,
+        call: ToolCall,
+        append_assistant: bool = True,
+        approval_id: UUID | None = None,
+    ) -> None:
         result = self.tools.execute(call)
         result_record = result.model_dump() | {
             "tool_name": call.name,
             "arguments": call.arguments,
             "call_id": call.call_id or f"call_{len(state.tool_results) + 1}",
+            "arguments_digest": ToolCallSnapshot.from_parts(
+                call.name, state.role, call.arguments, call.call_id
+            ).arguments_digest,
         }
+        if approval_id:
+            result_record["approval_id"] = str(approval_id)
         self.emit("tool_result", agent_run_id, result_record)
         state.tool_results.append(result_record)
         call_id = result_record["call_id"]
@@ -103,7 +115,13 @@ class BasicAgentRuntime:
         state.waiting_approval = False
         state.pending_approval_id = None
         state.pending_tool_call = None
-        self._execute_tool(agent_run_id, state, ToolCall(name=snapshot.tool_name, arguments=snapshot.arguments, call_id=snapshot.call_id or None), append_assistant=False)
+        self._execute_tool(
+            agent_run_id,
+            state,
+            ToolCall(name=snapshot.tool_name, arguments=snapshot.arguments, call_id=snapshot.call_id or None),
+            append_assistant=False,
+            approval_id=approval.approval_id,
+        )
         return self._run_loop(agent_run_id, state)
 
     def run(self, agent_run_id: UUID, state: AgentState) -> AgentState:
@@ -142,18 +160,26 @@ class BasicAgentRuntime:
                     return state
                 try:
                     snapshot = ToolCallSnapshot.from_parts(response.tool_call.name, state.role, response.tool_call.arguments, response.tool_call.call_id or f"call_{len(state.tool_results) + 1}")
-                    decision = self.policy_evaluator.evaluate(state.role, response.tool_call)
                 except ValueError as error:
                     snapshot = None
-                    decision = PolicyDecision(decision=PolicyAction.DENY, policy_id="security.tool_arguments", reason=str(error))
+                    decision = PolicyDecision(decision=PolicyAction.DENY, policy_id="security.tool_arguments", policy_version=getattr(self.policy_evaluator, "policy_version", "1"), reason=str(error))
+                else:
+                    try:
+                        decision = self.policy_evaluator.evaluate(state.role, response.tool_call)
+                    except Exception as error:
+                        self.emit("tool_call", agent_run_id, {"name": response.tool_call.name})
+                        self.emit("policy_evaluated", agent_run_id, {"decision": PolicyAction.DENY, "policy_id": "policy.evaluator", "policy_version": getattr(self.policy_evaluator, "policy_version", "1"), "reason": "policy evaluation failed", "tool_name": response.tool_call.name})
+                        self.emit("validation_error", agent_run_id, {"category": "policy_evaluator_error", "reason": "policy_evaluation_failed", "error": str(error)[:160]})
+                        state.finished = True
+                        return state
                 proposed = {"name": response.tool_call.name}
                 if snapshot is not None and decision.decision != PolicyAction.DENY:
                     proposed.update({"arguments": snapshot.arguments, "arguments_digest": snapshot.arguments_digest, "call_id": snapshot.call_id})
                 self.emit("tool_call", agent_run_id, proposed)
                 if getattr(self.policy_evaluator, "mode", "disabled") != "disabled":
-                    self.emit("policy_evaluated", agent_run_id, {"decision": decision.decision, "policy_id": decision.policy_id, "reason": decision.reason, "tool_name": response.tool_call.name})
+                    self.emit("policy_evaluated", agent_run_id, {"decision": decision.decision, "policy_id": decision.policy_id, "policy_version": decision.policy_version, "reason": decision.reason, "tool_name": response.tool_call.name})
                 if decision.decision == PolicyAction.DENY:
-                    self.emit("validation_error", agent_run_id, {"category": "policy_denied", "reason": "policy_denied", "policy_id": decision.policy_id, "tool_name": response.tool_call.name})
+                    self.emit("validation_error", agent_run_id, {"category": "policy_denied", "reason": "policy_denied", "policy_id": decision.policy_id, "policy_version": decision.policy_version, "tool_name": response.tool_call.name})
                     state.finished = True
                     return state
                 if decision.decision == PolicyAction.REQUIRE_APPROVAL:
@@ -162,13 +188,21 @@ class BasicAgentRuntime:
                         return state
                     state.waiting_approval = True
                     state.pending_tool_call = snapshot.model_dump(mode="json")
-                    approval = PendingApproval(run_id=self.run_id, agent_role=state.role, tool_call=snapshot, policy_id=decision.policy_id, reason=decision.reason)
+                    approval = PendingApproval(run_id=self.run_id, agent_role=state.role, tool_call=snapshot, policy_id=decision.policy_id, policy_version=decision.policy_version, reason=decision.reason)
                     if self.approval_handler:
-                        approval = self.approval_handler(approval, state)
+                        try:
+                            approval = self.approval_handler(approval, state)
+                        except Exception as error:
+                            state.waiting_approval = False
+                            state.pending_approval_id = None
+                            state.pending_tool_call = None
+                            self.emit("runtime_error", agent_run_id, {"category": "approval_persistence", "reason": "approval_persistence_failed", "error": str(error)[:160]})
+                            state.finished = True
+                            return state
                     state.pending_approval_id = approval.approval_id
                     self._append_assistant_call(state, ToolCall(name=snapshot.tool_name, arguments=snapshot.arguments, call_id=snapshot.call_id))
                     checkpoint_id = self.checkpoint(state) if self.checkpoint else None
-                    payload = {"approval_id": str(approval.approval_id), "agent_role": state.role.value, "tool_name": snapshot.tool_name, "policy_id": decision.policy_id}
+                    payload = {"approval_id": str(approval.approval_id), "agent_role": state.role.value, "tool_name": snapshot.tool_name, "policy_id": decision.policy_id, "policy_version": decision.policy_version, "arguments_digest": snapshot.arguments_digest, "call_id": snapshot.call_id}
                     self.emit("approval_required", agent_run_id, payload)
                     if checkpoint_id:
                         self.emit("checkpoint_created", agent_run_id, {"reason": "approval_required", "checkpoint_id": str(checkpoint_id), **payload})
