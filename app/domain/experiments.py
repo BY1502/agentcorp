@@ -1,7 +1,7 @@
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
@@ -50,6 +50,38 @@ class ExperimentStatus(StrEnum):
     COMPLETED = "COMPLETED"
 
 
+class BenchmarkSuiteProvenance(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    suite_id: str
+    version: int
+    digest: str | None = None
+
+    @field_validator("suite_id")
+    @classmethod
+    def non_empty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("benchmark suite provenance text must not be empty")
+        return value
+
+    @field_validator("digest")
+    @classmethod
+    def non_empty_digest(cls, value: str | None) -> str | None:
+        if value is not None:
+            value = value.strip()
+            if not value:
+                raise ValueError("benchmark suite provenance digest must not be empty")
+        return value
+
+    @field_validator("version")
+    @classmethod
+    def positive_version(cls, value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("benchmark suite version must be a positive integer")
+        return value
+
+
 class ExperimentCase(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -90,11 +122,13 @@ class ExperimentModelTarget(BaseModel):
 
 class ExperimentSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
+    _allows_frozen_case_provenance: ClassVar[bool] = False
 
     spec_version: str = "experiment-spec-v1"
     name: str
     description: str | None = None
-    cases: tuple[ExperimentCase, ...]
+    cases: tuple[ExperimentCase, ...] = ()
+    benchmark_suite: BenchmarkSuiteProvenance | None = None
     models: tuple[ExperimentModelTarget, ...]
     repetitions: int = 1
     runtime_config: dict[str, Any] = Field(default_factory=dict)
@@ -125,8 +159,10 @@ class ExperimentSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_matrix(self):
-        if not self.cases:
-            raise ValueError("experiment must contain at least one case")
+        if not self.cases and self.benchmark_suite is None:
+            raise ValueError("experiment requires inline cases or a benchmark suite")
+        if self.cases and self.benchmark_suite is not None and not self._allows_frozen_case_provenance:
+            raise ValueError("experiment cannot combine inline cases and a benchmark suite")
         if not self.models:
             raise ValueError("experiment must contain at least one model")
         case_ids = [case.case_id for case in self.cases]
@@ -145,6 +181,7 @@ class ExperimentSpec(BaseModel):
 
 class Experiment(ExperimentSpec):
     model_config = ConfigDict(frozen=True)
+    _allows_frozen_case_provenance: ClassVar[bool] = True
 
     experiment_id: UUID = Field(default_factory=uuid4)
     status: ExperimentStatus = ExperimentStatus.DRAFT

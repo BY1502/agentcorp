@@ -83,7 +83,7 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·evaluation·approval 조회·resume, `GET /analytics/runs`, `GET /analytics/models`, `POST /experiments`, `GET /experiments/{id}`, `POST /experiments/{id}/seal`, `POST /experiments/{id}/execute`, `GET /experiments/{id}/runs`, `GET /experiments/{id}/analytics`, `POST /benchmark-suites`, `GET /benchmark-suites`, `GET /benchmark-suites/{suite_id}/versions/{version}`, `POST /benchmark-suites/{suite_id}/versions/{version}/publish`를 제공합니다. Metrics, evaluation, aggregate analytics는 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool·LLM judge를 호출하거나 historical data를 변경하지 않습니다. Experiment analytics는 ExperimentCell mapping만 읽고 PHASE 8 집계 semantics를 재사용하며 current registry를 조회하지 않습니다. Aggregate model group은 frozen `ModelExecutionSnapshot`을 사용하며 base URL은 identity에서 제외합니다. Experiments는 동일 case·workspace reference·runtime/policy/skill 조건과 model references를 정의하고, sealed execution은 case × model × repetition을 기존 동기 Run 경로로 순차 실행합니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
+현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·evaluation·approval 조회·resume, `GET /analytics/runs`, `GET /analytics/models`, `POST /experiments`, `GET /experiments/{id}`, `POST /experiments/{id}/seal`, `POST /experiments/{id}/execute`, `GET /experiments/{id}/runs`, `GET /experiments/{id}/analytics`, `POST /benchmark-suites`, `GET /benchmark-suites`, `GET /benchmark-suites/{suite_id}/versions/{version}`, `POST /benchmark-suites/{suite_id}/versions/{version}/publish`를 제공합니다. Metrics, evaluation, aggregate analytics는 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool·LLM judge를 호출하거나 historical data를 변경하지 않습니다. Experiment analytics는 ExperimentCell mapping만 읽고 PHASE 8 집계 semantics를 재사용하며 current registry를 조회하지 않습니다. Aggregate model group은 frozen `ModelExecutionSnapshot`을 사용하며 base URL은 identity에서 제외합니다. Experiments는 inline cases 또는 명시된 Published BenchmarkSuite version 중 하나를 workload source로 받아 ordered case snapshot과 suite provenance를 저장하고, sealed execution은 case × model × repetition을 기존 동기 Run 경로로 순차 실행합니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
 
 ## 테스트
 
@@ -104,6 +104,10 @@ SEALED `Experiment`는 case 순서 → model 순서 → 0-based repetition 순�
 ## PHASE 10 Step 1
 
 `BenchmarkSuite`는 모델·provider·runtime과 분리된 재사용 가능한 workload입니다. `suite_id`와 양의 정수 `version`을 복합 identity로 사용하고, ordered `BenchmarkCaseSpec`를 `DRAFT`로 저장한 뒤 publish합니다. publish 시 non-empty cases, unique case IDs, portable/existing workspace reference를 검증하고 execution-relevant fields의 deterministic SHA-256 `spec_digest`를 고정합니다. `PUBLISHED` suite는 수정할 수 없으며, 이번 단계에서는 Experiment 연결·실행·모델 선택을 추가하지 않았습니다.
+
+## PHASE 10 Step 2
+
+`POST /experiments`에 `benchmark_suite: {"suite_id": "...", "version": 1}`를 전달하면 Published Suite를 한 번 검증한 뒤 digest provenance와 ordered cases를 Experiment에 복사합니다. 기존 inline `cases`와 suite 입력은 함께 사용할 수 없고, 생성 후 Experiment는 suite 저장소 없이 seal·execute·analytics할 수 있습니다. Suite 기반 Experiment도 생성 직후 `DRAFT`이며 model snapshot은 기존 seal 시점에 freeze됩니다.
 
 ## 개발 로드맵
 

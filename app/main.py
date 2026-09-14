@@ -11,7 +11,7 @@ from .services.replay import ReplayService, RunNotFoundError
 from .services.metrics import RunMetricsService
 from .services.evaluation import RunEvaluationService
 from .services.aggregates import RunAggregateService
-from .services.experiments import ExperimentExecutionError, ExperimentExecutionService, ExperimentNotFoundError, ExperimentService
+from .services.experiments import ExperimentCreationError, ExperimentExecutionError, ExperimentExecutionService, ExperimentNotFoundError, ExperimentService
 from .services.experiment_analytics import ExperimentAnalyticsService
 from .services.benchmarks import BenchmarkSuiteConflictError, BenchmarkSuiteNotFoundError, BenchmarkSuiteService, BenchmarkSuiteValidationError
 from .domain.policy import PendingApproval
@@ -33,10 +33,10 @@ missions=MissionService(storage); runs=RunService(storage=storage)
 metrics=RunMetricsService(storage)
 evaluation=RunEvaluationService(storage, metrics)
 aggregates=RunAggregateService(storage, metrics, evaluation)
-experiments=ExperimentService(storage, runs.registry)
+benchmark_suites=BenchmarkSuiteService(storage)
+experiments=ExperimentService(storage, runs.registry, benchmark_suites)
 experiment_execution=ExperimentExecutionService(storage, runs, experiments)
 experiment_analytics=ExperimentAnalyticsService(storage, aggregates)
-benchmark_suites=BenchmarkSuiteService(storage)
 @app.post('/missions', response_model=MissionResponse)
 def create_mission(request: MissionCreate):
     m=missions.create(request.title,request.fixture); return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
@@ -145,7 +145,12 @@ def get_model_aggregates(model_id: str | None = None, provider_type: str | None 
 
 @app.post('/experiments', response_model=Experiment)
 def create_experiment(request: ExperimentSpec):
-    return experiments.create(request)
+    try:
+        return experiments.create(request)
+    except BenchmarkSuiteNotFoundError as error:
+        raise HTTPException(404, 'benchmark suite version not found') from error
+    except ExperimentCreationError as error:
+        raise HTTPException(409, str(error)) from error
 
 @app.get('/experiments/{experiment_id}', response_model=Experiment)
 def get_experiment(experiment_id: UUID):

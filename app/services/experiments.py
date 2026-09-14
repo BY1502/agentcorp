@@ -3,6 +3,8 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from app.checkpoints.local import LocalWorkspaceSnapshotManager
 from app.domain.experiments import (
+    BenchmarkSuiteProvenance,
+    ExperimentCase,
     Experiment,
     ExperimentCell,
     ExperimentModelTarget,
@@ -11,6 +13,7 @@ from app.domain.experiments import (
     ExperimentStatus,
 )
 from app.domain.models import MissionRecord, ModelExecutionSnapshot
+from app.domain.benchmarks import BenchmarkSuiteStatus, benchmark_suite_digest
 from app.models.registry import ModelConfigRegistry
 from app.skills.filesystem import FilesystemSkillLoader
 
@@ -23,23 +26,62 @@ class ExperimentExecutionError(ValueError):
     status_code = 409
 
 
+class ExperimentCreationError(ValueError):
+    status_code = 409
+
+
 class ExperimentService:
     """Create and seal experiment definitions without executing a mission."""
 
-    def __init__(self, storage, registry: ModelConfigRegistry):
+    def __init__(self, storage, registry: ModelConfigRegistry, benchmark_suites=None):
         self.storage = storage
         self.registry = registry
+        self.benchmark_suites = benchmark_suites
 
     def create(self, spec: ExperimentSpec) -> Experiment:
+        cases = spec.cases
+        benchmark_suite = spec.benchmark_suite
+        if spec.benchmark_suite is not None:
+            cases, benchmark_suite = self._workload_from_suite(spec.benchmark_suite)
         # Client-supplied snapshots are ignored; only registry resolution at seal is authoritative.
+        payload = spec.model_dump(exclude={"models", "expected_run_count", "cases", "benchmark_suite"})
         experiment = Experiment(
             experiment_id=uuid4(),
             status=ExperimentStatus.DRAFT,
-            **spec.model_dump(exclude={"models", "expected_run_count"}),
+            **payload,
+            cases=cases,
+            benchmark_suite=benchmark_suite,
             models=tuple(ExperimentModelTarget(model_id=target.model_id) for target in spec.models),
         )
         self.storage.save_experiment(experiment)
         return experiment
+
+    def _workload_from_suite(self, provenance: BenchmarkSuiteProvenance):
+        if self.benchmark_suites is None:
+            raise ExperimentCreationError("benchmark suite integration is unavailable")
+        suite = self.benchmark_suites.get(provenance.suite_id, provenance.version)
+        if suite.status != BenchmarkSuiteStatus.PUBLISHED:
+            raise ExperimentCreationError("only published benchmark suites can back experiments")
+        if not suite.cases or len({case.case_id for case in suite.cases}) != len(suite.cases):
+            raise ExperimentCreationError("published benchmark suite has invalid cases")
+        if provenance.digest is not None and suite.spec_digest != provenance.digest:
+            raise ExperimentCreationError("benchmark suite digest mismatch")
+        if benchmark_suite_digest(suite) != suite.spec_digest:
+            raise ExperimentCreationError("benchmark suite digest mismatch")
+        try:
+            cases = tuple(
+                ExperimentCase(
+                    case_id=case.case_id,
+                    name=case.name,
+                    mission_input=case.mission_input,
+                    workspace_source=case.workspace_source,
+                    expected_test_target=case.expected_test_target,
+                )
+                for case in suite.cases
+            )
+        except ValueError as error:
+            raise ExperimentCreationError("published benchmark suite has invalid cases") from error
+        return cases, provenance.model_copy(update={"digest": suite.spec_digest})
 
     def get(self, experiment_id: UUID) -> Experiment:
         experiment = self.storage.get_experiment(experiment_id)
