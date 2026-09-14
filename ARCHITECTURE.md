@@ -156,6 +156,7 @@ Tests cover deterministic skill loading/checksums, prompt ordering, traversal re
 - Automatic model/skill evaluation, judge models, statistical comparisons, and leaderboard features.
 
 PHASE 8 observability foundation adds read-only `RunMetricsService` and `RunEvaluationService`. Metrics and deterministic evaluation are derived on read from persisted run records; evaluation uses versioned code-owned rules and safe evidence references only. It does not call providers/tools, persist evaluation records, inspect workspace contents, or use an LLM judge.
+PHASE 8 Step 3 adds `RunAggregateService`, which derives whole-run and frozen-model-snapshot aggregate read models from `RunMetricsService` and `RunEvaluationService`. Runs remain independent (including resumed children), ordering is deterministic, and no aggregate persistence, model ranking, composite score, provider/tool call, or current-registry resolution is introduced.
 - Full checkpoint branching UX; v0.1 provides serializable state and a local copy-based fork seam.
 - PostgreSQL deployment, migrations beyond basic setup, multi-process workers, queues, Redis, Celery, Docker Compose, Kubernetes, and microservices.
 - Arbitrary shell execution, unrestricted tools, browser/network tools, and long-running async orchestration.

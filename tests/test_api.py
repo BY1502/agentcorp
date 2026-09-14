@@ -50,3 +50,15 @@ def test_get_run_evaluation():
 
 def test_unknown_run_evaluation_returns_404():
     assert client.get('/runs/'+str(uuid4())+'/evaluation').status_code==404
+
+def test_get_run_analytics():
+    mission=client.post('/missions',json={}).json(); run=client.post('/missions/'+mission['id']+'/runs').json()
+    response=client.get('/analytics/runs')
+    models=client.get('/analytics/models')
+    assert response.status_code==200 and response.json()['run_count']>=1
+    assert models.status_code==200 and any(item['model_id']=='fake-default' for item in models.json())
+    assert response.json()['evaluation_version']=='agentcorp-eval-v1'
+    assert 'stdout' not in response.text and 'reasoning' not in response.text
+
+def test_analytics_filters_are_read_only_and_unknown_status_is_empty():
+    assert client.get('/analytics/runs', params={'status': 'NOT_A_REAL_STATUS'}).json()['run_count']==0

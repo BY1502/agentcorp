@@ -10,10 +10,12 @@ from .persistence.sqlite import SQLiteStore
 from .services.replay import ReplayService, RunNotFoundError
 from .services.metrics import RunMetricsService
 from .services.evaluation import RunEvaluationService
+from .services.aggregates import RunAggregateService
 from .domain.policy import PendingApproval
 from .domain.replay import ReplayInspection
 from .domain.metrics import RunMetrics
 from .domain.evaluation import RunEvaluation
+from .domain.aggregates import ModelAggregate, RunAggregate
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
 
@@ -24,6 +26,7 @@ storage = SQLiteStore(settings.storage_path)
 missions=MissionService(storage); runs=RunService(storage=storage)
 metrics=RunMetricsService(storage)
 evaluation=RunEvaluationService(storage, metrics)
+aggregates=RunAggregateService(storage, metrics, evaluation)
 @app.post('/missions', response_model=MissionResponse)
 def create_mission(request: MissionCreate):
     m=missions.create(request.title,request.fixture); return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
@@ -121,3 +124,11 @@ def get_evaluation(run_id: UUID):
         return evaluation.get(run_id)
     except RunNotFoundError as error:
         raise HTTPException(404, 'run not found') from error
+
+@app.get('/analytics/runs', response_model=RunAggregate)
+def get_run_aggregate(model_id: str | None = None, provider_type: str | None = None, model_name: str | None = None, status: str | None = None):
+    return aggregates.aggregate(model_id, provider_type, model_name, status)
+
+@app.get('/analytics/models', response_model=list[ModelAggregate])
+def get_model_aggregates(model_id: str | None = None, provider_type: str | None = None, model_name: str | None = None, status: str | None = None):
+    return aggregates.model_aggregates(model_id, provider_type, model_name, status)

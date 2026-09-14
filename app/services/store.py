@@ -18,6 +18,7 @@ class AppStore:
     def get_mission(self, mission_id): return self.missions.get(mission_id)
     def save_run(self, result): self.runs[result.mission_run_id] = result.model_copy(deep=True)
     def get_run(self, run_id): return self.runs.get(run_id)
+    def list_runs(self): return [self.runs[run_id].model_copy(deep=True) for run_id in sorted(self.runs, key=str)]
     def append_events(self, events):
         for event in events:
             self.events.setdefault(event.mission_run_id, []).append(event.model_copy(deep=True))

@@ -291,3 +291,10 @@ class SQLiteStore:
                 "SELECT result_json FROM runs WHERE run_id = ?", (str(run_id),)
             ).fetchone()
         return MissionRunResult.model_validate(json.loads(row["result_json"])) if row else None
+
+    def list_runs(self) -> list[MissionRunResult]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT result_json FROM runs ORDER BY run_id ASC"
+            ).fetchall()
+        return [MissionRunResult.model_validate(json.loads(row["result_json"])) for row in rows]
