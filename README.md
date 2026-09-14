@@ -83,11 +83,15 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·evaluation·approval 조회·resume와 `GET /analytics/runs`, `GET /analytics/models`를 제공합니다. Metrics, evaluation, aggregate analytics는 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool·LLM judge를 호출하거나 historical data를 변경하지 않습니다. Aggregate model group은 현재 registry가 아니라 frozen `ModelExecutionSnapshot`을 사용하며 base URL은 identity에서 제외합니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
+현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·evaluation·approval 조회·resume, `GET /analytics/runs`, `GET /analytics/models`, `POST /experiments`, `GET /experiments/{id}`, `POST /experiments/{id}/seal`을 제공합니다. Metrics, evaluation, aggregate analytics는 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool·LLM judge를 호출하거나 historical data를 변경하지 않습니다. Aggregate model group은 현재 registry가 아니라 frozen `ModelExecutionSnapshot`을 사용하며 base URL은 identity에서 제외합니다. Experiments는 동일 case·workspace reference·runtime/policy/skill 조건과 model references를 정의하며 create/seal은 모델·도구·mission을 실행하지 않습니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
 
 ## 테스트
 
 현재 테스트는 health/API lifecycle, model selection 및 safe snapshot, ExecutionManifest와 SkillVersion snapshot, TraceEvent ordering, FakeModelProvider, skill/path traversal/prompt/checkpoint/handoff 계약을 검증합니다.
+
+## PHASE 9 Step 1
+
+`Experiment`는 동일한 mission case, portable workspace reference, 공통 runtime/policy/skill 조건에서 여러 model target과 repetition을 비교하기 위한 immutable specification입니다. `DRAFT`를 `SEALED`하면 registry의 model ID가 안전한 `ModelExecutionSnapshot`으로 원자적으로 freeze되며, experiment 생성·seal은 model/provider/tool/mission을 실행하지 않습니다.
 
 ## 개발 로드맵
 

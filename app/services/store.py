@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
+from app.domain.experiments import Experiment
 from app.domain.models import MissionRecord, TraceEvent
 
 __all__ = ["AppStore", "MissionRecord", "store"]
@@ -13,12 +14,21 @@ class AppStore:
         self.checkpoints = {}
         self.workspace_snapshots = {}
         self.approvals = {}
+        self.experiments = {}
 
     def save_mission(self, mission): self.missions[mission.id] = MissionRecord(mission.title, mission.fixture, mission.id, mission.version)
     def get_mission(self, mission_id): return self.missions.get(mission_id)
     def save_run(self, result): self.runs[result.mission_run_id] = result.model_copy(deep=True)
     def get_run(self, run_id): return self.runs.get(run_id)
     def list_runs(self): return [self.runs[run_id].model_copy(deep=True) for run_id in sorted(self.runs, key=str)]
+    def save_experiment(self, experiment: Experiment) -> None:
+        existing = self.experiments.get(experiment.experiment_id)
+        if existing and existing.status == "SEALED" and existing != experiment:
+            raise ValueError("sealed experiment is immutable")
+        self.experiments[experiment.experiment_id] = experiment.model_copy(deep=True)
+    def get_experiment(self, experiment_id) -> Experiment | None:
+        experiment = self.experiments.get(experiment_id)
+        return experiment.model_copy(deep=True) if experiment else None
     def append_events(self, events):
         for event in events:
             self.events.setdefault(event.mission_run_id, []).append(event.model_copy(deep=True))

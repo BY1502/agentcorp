@@ -11,11 +11,13 @@ from .services.replay import ReplayService, RunNotFoundError
 from .services.metrics import RunMetricsService
 from .services.evaluation import RunEvaluationService
 from .services.aggregates import RunAggregateService
+from .services.experiments import ExperimentNotFoundError, ExperimentService
 from .domain.policy import PendingApproval
 from .domain.replay import ReplayInspection
 from .domain.metrics import RunMetrics
 from .domain.evaluation import RunEvaluation
 from .domain.aggregates import ModelAggregate, RunAggregate
+from .domain.experiments import Experiment, ExperimentSpec
 
 app = FastAPI(title="AgentCorp", version="0.1.0")
 
@@ -27,6 +29,7 @@ missions=MissionService(storage); runs=RunService(storage=storage)
 metrics=RunMetricsService(storage)
 evaluation=RunEvaluationService(storage, metrics)
 aggregates=RunAggregateService(storage, metrics, evaluation)
+experiments=ExperimentService(storage, runs.registry)
 @app.post('/missions', response_model=MissionResponse)
 def create_mission(request: MissionCreate):
     m=missions.create(request.title,request.fixture); return MissionResponse(id=m.id,title=m.title,version=m.version,fixture=m.fixture)
@@ -132,3 +135,25 @@ def get_run_aggregate(model_id: str | None = None, provider_type: str | None = N
 @app.get('/analytics/models', response_model=list[ModelAggregate])
 def get_model_aggregates(model_id: str | None = None, provider_type: str | None = None, model_name: str | None = None, status: str | None = None):
     return aggregates.model_aggregates(model_id, provider_type, model_name, status)
+
+@app.post('/experiments', response_model=Experiment)
+def create_experiment(request: ExperimentSpec):
+    return experiments.create(request)
+
+@app.get('/experiments/{experiment_id}', response_model=Experiment)
+def get_experiment(experiment_id: UUID):
+    try:
+        return experiments.get(experiment_id)
+    except ExperimentNotFoundError as error:
+        raise HTTPException(404, 'experiment not found') from error
+
+@app.post('/experiments/{experiment_id}/seal', response_model=Experiment)
+def seal_experiment(experiment_id: UUID):
+    try:
+        return experiments.seal(experiment_id)
+    except ExperimentNotFoundError as error:
+        raise HTTPException(404, 'experiment not found') from error
+    except UnknownModelError as error:
+        raise HTTPException(404, str(error)) from error
+    except DisabledModelError as error:
+        raise HTTPException(409, str(error)) from error

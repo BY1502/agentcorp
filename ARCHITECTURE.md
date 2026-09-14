@@ -120,7 +120,7 @@ Tool paths are resolved beneath the assigned workspace root, then checked with `
 
 The application boundary is `Runtime/Service -> repository protocol -> persistent adapter`. v0.1 uses the standard-library SQLite adapter at `AGENTCORP_STORAGE_PATH` (default `data/agentcorp.db`); the in-memory adapter remains available for deterministic unit tests. SQLite is not imported by domain or runtime code.
 
-The adapter stores missions, run results, append-only trace events, checkpoint state, workspace-snapshot metadata, and approvals. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 1. Run finalization writes the result and its events in one short transaction, while checkpoint, workspace, and approval metadata are committed at their safe boundaries. Approval decision state and its audit event use one local SQLite transaction; filesystem side effects remain outside that transaction.
+The adapter stores missions, run results, append-only trace events, checkpoint state, workspace-snapshot metadata, approvals, and experiment specifications. UUIDs and datetimes use explicit JSON/primitive serialization; `PRAGMA user_version` records schema version 2. Run finalization writes the result and its events in one short transaction, while checkpoint, workspace, approval, and experiment metadata are committed at their safe boundaries. Approval decision state and its audit event use one local SQLite transaction; filesystem side effects remain outside that transaction.
 
 Trace payloads, manifests, and checkpoint state are JSON-serializable only. No arbitrary Python object, API key, credential value, credential reference, raw provider request/response, or hidden reasoning is stored. Model records use a credential reference or runtime-resolved secret only before persistence. Historical run reads use the stored `ExecutionManifest` and `ModelExecutionSnapshot`; they never re-resolve mutable model configuration. Trace records are append-only.
 
@@ -136,6 +136,9 @@ Historical replay is a read-only inspection of persisted Run, Manifest, Events, 
 - `GET /runs/{id}/approvals`, `GET /approvals/{id}`
 - `POST /approvals/{id}/approve`, `POST /approvals/{id}/reject`
 - `POST /runs/{id}/resume`
+- `GET /runs/{id}/metrics`, `GET /runs/{id}/evaluation`
+- `GET /analytics/runs`, `GET /analytics/models`
+- `POST /experiments`, `GET /experiments/{id}`, `POST /experiments/{id}/seal`
 
 `POST /missions/{id}/runs` accepts an optional JSON body `{ "model_id": "..." }`. When omitted, the configured default model is selected. Unknown models return 404 and disabled models return 409; neither path silently falls back. The response exposes only the safe immutable model snapshot. Handlers remain thin and call services. Run creation initially executes synchronously to keep behavior easy to observe; background execution, streaming, and authentication are outside the first slice.
 
@@ -157,6 +160,7 @@ Tests cover deterministic skill loading/checksums, prompt ordering, traversal re
 
 PHASE 8 observability foundation adds read-only `RunMetricsService` and `RunEvaluationService`. Metrics and deterministic evaluation are derived on read from persisted run records; evaluation uses versioned code-owned rules and safe evidence references only. It does not call providers/tools, persist evaluation records, inspect workspace contents, or use an LLM judge.
 PHASE 8 Step 3 adds `RunAggregateService`, which derives whole-run and frozen-model-snapshot aggregate read models from `RunMetricsService` and `RunEvaluationService`. Runs remain independent (including resumed children), ordering is deterministic, and no aggregate persistence, model ranking, composite score, provider/tool call, or current-registry resolution is introduced.
+PHASE 9 Step 1 adds persisted `Experiment` specifications with `DRAFT` and `SEALED` states. A seal resolves every referenced model ID through the registry into safe immutable `ModelExecutionSnapshot` values atomically; it does not create Runs or call providers/tools. Cases, repetition count, common runtime/policy settings, and optional SkillVersion snapshots are frozen for the later matrix executor. Sealed definitions are returned unchanged after registry drift.
 - Full checkpoint branching UX; v0.1 provides serializable state and a local copy-based fork seam.
 - PostgreSQL deployment, migrations beyond basic setup, multi-process workers, queues, Redis, Celery, Docker Compose, Kubernetes, and microservices.
 - Arbitrary shell execution, unrestricted tools, browser/network tools, and long-running async orchestration.

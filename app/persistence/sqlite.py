@@ -6,6 +6,7 @@ from threading import RLock
 from typing import Any
 from uuid import UUID
 
+from app.domain.experiments import Experiment
 from app.domain.models import CheckpointState, MissionRecord, MissionRunResult, TraceEvent, WorkspaceSnapshot
 from app.domain.policy import PendingApproval
 from app.tracing.recorder import sanitize
@@ -48,7 +49,8 @@ def _safe(value: Any) -> Any:
 
 
 def _json(model: Any) -> str:
-    return json.dumps(_safe(model.model_dump(mode="json")), separators=(",", ":"), sort_keys=True)
+    exclude = {"expected_run_count"} if isinstance(model, Experiment) else None
+    return json.dumps(_safe(model.model_dump(mode="json", exclude=exclude)), separators=(",", ":"), sort_keys=True)
 
 
 class SQLiteStore:
@@ -66,7 +68,7 @@ class SQLiteStore:
     def _initialize(self) -> None:
         with self._lock:
             version = self._connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise RuntimeError(f"unsupported AgentCorp storage schema version: {version}")
             if version == 0:
                 self._connection.execute("PRAGMA user_version = 1")
@@ -105,8 +107,15 @@ class SQLiteStore:
                     run_id TEXT NOT NULL,
                     approval_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS experiments (
+                    experiment_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    spec_json TEXT NOT NULL
+                );
                 """
             )
+            if version < 2:
+                self._connection.execute("PRAGMA user_version = 2")
 
     def close(self) -> None:
         with self._lock:
@@ -271,6 +280,29 @@ class SQLiteStore:
                 "INSERT OR REPLACE INTO runs(run_id, mission_id, result_json) VALUES (?, ?, ?)",
                 (str(result.mission_run_id), str(result.mission_id), _json(result)),
             )
+
+    def save_experiment(self, experiment: Experiment) -> None:
+        with self._lock, self._connection:
+            existing = self._connection.execute(
+                "SELECT spec_json FROM experiments WHERE experiment_id = ?",
+                (str(experiment.experiment_id),),
+            ).fetchone()
+            if existing is not None:
+                previous = Experiment.model_validate(json.loads(existing["spec_json"]))
+                if previous.status == "SEALED" and previous != experiment:
+                    raise ValueError("sealed experiment is immutable")
+            self._connection.execute(
+                "INSERT OR REPLACE INTO experiments(experiment_id, status, spec_json) VALUES (?, ?, ?)",
+                (str(experiment.experiment_id), experiment.status.value, _json(experiment)),
+            )
+
+    def get_experiment(self, experiment_id: UUID) -> Experiment | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT spec_json FROM experiments WHERE experiment_id = ?",
+                (str(experiment_id),),
+            ).fetchone()
+        return Experiment.model_validate(json.loads(row["spec_json"])) if row else None
 
     def finalize_run(self, result: MissionRunResult, events: list[TraceEvent]) -> None:
         """Commit the completed run and its append-only events together."""
