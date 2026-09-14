@@ -59,7 +59,8 @@ Checkpoint는 runtime state, handoff state, model assignment, SkillVersion snaps
 
 `POST /runs/{id}/resume`는 FAILED/EXHAUSTED run의 지원되는 handoff checkpoint에서 새 Run을 만듭니다. PM handoff는 Developer부터, Developer handoff는 QA부터 재개하며 저장된 WorkspaceSnapshot을 새 workspace에 복원합니다. 부모 Run과 workspace는 변경하지 않고 저장된 ExecutionManifest·model snapshot·SkillVersion snapshot을 사용합니다. Replay는 읽기 전용 inspection이고, Resume은 실행이며, Rerun은 처음부터 시작합니다.
 
-`approval_mode=disabled`가 기본값이며 기존 자동 도구 실행을 보존합니다. `policy` 모드에서는 읽기 전용 도구를 자동 허용하고 `edit_file`을 `WAITING_APPROVAL`로 일시정지합니다. Step 1의 approval API는 조회 전용이며 approve/reject와 동일 Run continuation은 다음 단계 범위입니다.
+`approval_mode=disabled`가 기본값이며 기존 자동 도구 실행을 보존합니다. `policy` 모드에서는 읽기 전용 도구를 자동 허용하고 `edit_file`을 `WAITING_APPROVAL`로 일시정지합니다. `POST /approvals/{id}/approve`는 저장된 exact `ToolCallSnapshot`을 digest 검증 후 같은 Run에서 실행하고 AgentState의 대화를 이어갑니다. `POST /approvals/{id}/reject`는 도구 실행·recovery 없이 같은 Run을 FAILED로 종료합니다. PHASE 6 Resume은 새 Run을 만들며 approval continuation은 새 Run을 만들지 않습니다.
+승인 상태는 `PENDING → APPROVED` 또는 `PENDING → REJECTED` 한 번만 전이합니다. 재시작 후에도 suspension checkpoint의 AgentState, workspace snapshot, skill snapshot, frozen manifest로 continuation하며, 승인된 tool call은 다시 모델에게 생성시키지 않습니다. 승인/거절 race는 SQLite compare-and-set 전이로 한 요청만 성공합니다.
 
 ## v0.1 범위
 

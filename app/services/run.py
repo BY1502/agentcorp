@@ -12,14 +12,16 @@ from app.domain.models import (
     ModelExecutionSnapshot,
     PolicyExecutionSnapshot,
     Role,
+    TraceEvent,
 )
+from app.domain.policy import ApprovalStatus, PendingApproval, ToolCallSnapshot
 from app.models.factory import ProviderFactory
 from app.models.lmstudio import LMStudioProvider
 from app.models.registry import ModelConfigRegistry
 from app.runtime.orchestrator import BasicMissionOrchestrator
 from app.skills.filesystem import DeterministicPromptCompiler, FilesystemSkillLoader, SnapshotSkillLoader
 from app.tools.filesystem import WorkspaceTools
-from app.tracing.recorder import InMemoryTraceRecorder
+from app.tracing.recorder import InMemoryTraceRecorder, sanitize_text
 from .store import store
 
 
@@ -33,6 +35,10 @@ class ResumeNotFoundError(ResumeError):
 
 class ApprovalError(ValueError):
     status_code = 409
+
+
+class ApprovalNotFoundError(ApprovalError):
+    status_code = 404
 
 
 def _workspace_hashes(root: Path) -> dict[str, str]:
@@ -303,3 +309,145 @@ class RunService:
             return self.storage.get_approval(approval_id)
         except Exception as error:
             raise ApprovalError("approval is corrupted") from error
+
+    def _approval_context(self, approval_id, validate_workspace=True):
+        approval = self.approval(approval_id)
+        if approval is None:
+            raise ApprovalNotFoundError(f"approval not found: {approval_id}")
+        if approval.status != ApprovalStatus.PENDING:
+            raise ApprovalError("approval is already decided")
+        run = self.storage.get_run(approval.run_id)
+        if run is None:
+            raise ApprovalError("approval run is missing")
+        if run.status != "WAITING_APPROVAL":
+            raise ApprovalError("run is not waiting for approval")
+        pending = [item for item in self.approvals_for(run.mission_run_id) if item.status == ApprovalStatus.PENDING]
+        if len(pending) != 1 or pending[0].approval_id != approval.approval_id:
+            raise ApprovalError("approval does not match the active run state")
+        checkpoints = []
+        for checkpoint_id in run.checkpoint_ids:
+            try:
+                checkpoint = self.storage.get_checkpoint(checkpoint_id)
+            except Exception as error:
+                raise ApprovalError("approval checkpoint is corrupted") from error
+            if checkpoint and checkpoint.agent_state.waiting_approval and checkpoint.agent_state.pending_approval_id == approval.approval_id:
+                checkpoints.append(checkpoint)
+        if len(checkpoints) != 1:
+            raise ApprovalError("approval checkpoint is missing or ambiguous")
+        checkpoint = checkpoints[0]
+        if checkpoint.agent_state.role != approval.agent_role:
+            raise ApprovalError("approval agent role mismatch")
+        try:
+            snapshot = ToolCallSnapshot.from_parts(
+                approval.tool_call.tool_name,
+                approval.tool_call.agent_role,
+                approval.tool_call.arguments,
+                approval.tool_call.call_id,
+            )
+        except ValueError as error:
+            raise ApprovalError("approval tool snapshot is corrupted") from error
+        pending_snapshot = ToolCallSnapshot.model_validate(checkpoint.agent_state.pending_tool_call or {})
+        if snapshot != approval.tool_call or pending_snapshot != approval.tool_call:
+            raise ApprovalError("approval tool snapshot does not match checkpoint")
+        workspace = Path(run.workspace_reference)
+        if validate_workspace:
+            try:
+                workspace_snapshot = self.storage.get_workspace_snapshot(checkpoint.workspace_snapshot_id)
+            except Exception as error:
+                raise ApprovalError("approval workspace snapshot is corrupted") from error
+            if workspace_snapshot is None or not workspace.is_dir() or not Path(workspace_snapshot.location).is_dir():
+                raise ApprovalError("approval workspace snapshot is missing")
+            if _workspace_hashes(workspace) != _workspace_hashes(Path(workspace_snapshot.location)):
+                raise ApprovalError("approval workspace changed while waiting")
+        return approval, run, checkpoint, workspace
+
+    def _approval_response(self, approval, run):
+        return {
+            "approval_id": approval.approval_id,
+            "approval_status": approval.status.value,
+            "run_id": run.mission_run_id,
+            "run_status": run.status,
+        }
+
+    def approve(self, approval_id):
+        approval, run, checkpoint, workspace = self._approval_context(approval_id)
+        if not run.execution_manifest.model_snapshot:
+            raise ApprovalError("approval run has no model snapshot")
+        try:
+            provider = self.provider_factory.create_from_snapshot(run.execution_manifest.model_snapshot)
+        except Exception as error:
+            raise ApprovalError("historical model provider could not be created") from error
+        approved = self.storage.transition_approval(approval_id, ApprovalStatus.PENDING, ApprovalStatus.APPROVED)
+        if approved is None:
+            raise ApprovalError("approval is already decided")
+        events = self.storage.list_events(run.mission_run_id)
+        recorder = InMemoryTraceRecorder(events)
+        recorder.record(TraceEvent(
+            mission_id=run.mission_id,
+            mission_run_id=run.mission_run_id,
+            agent_run_id=checkpoint.current_agent_run_id,
+            sequence=len(events) + 1,
+            event_type="approval_approved",
+            payload={"approval_id": str(approved.approval_id), "policy_id": approved.policy_id, "tool_name": approved.tool_call.tool_name},
+        ))
+        running = run.model_copy(update={"status": "RUNNING"})
+        self.storage.save_run(running)
+        snapshot_manager = LocalWorkspaceSnapshotManager(self.workspace_root, self.storage)
+        orchestrator = BasicMissionOrchestrator(
+            provider,
+            DeterministicPromptCompiler(SnapshotSkillLoader(checkpoint.skill_versions)),
+            WorkspaceTools,
+            recorder,
+            snapshot_manager,
+            InMemoryCheckpointManager(snapshot_manager, self.storage),
+            self.storage,
+        )
+        result = orchestrator.run(
+            run.mission_id,
+            run.execution_manifest,
+            Path(self.storage.get_mission(run.mission_id).fixture),
+            self.workspace_root,
+            mission_context=_mission_context(self.storage.get_mission(run.mission_id)),
+            run_id=run.mission_run_id,
+            workspace=workspace,
+            continue_checkpoint=checkpoint,
+            approved_approval=approved,
+            prior_result=running,
+            resumed_from_run_id=run.resumed_from_run_id,
+            resumed_from_checkpoint_id=run.resumed_from_checkpoint_id,
+            parent_pm_agent_run_id=run.pm_agent_run_id,
+        )
+        all_events = recorder.for_run(run.mission_run_id)
+        self.storage.finalize_run(result, all_events[run.event_count:])
+        return self._approval_response(approved, result)
+
+    def reject(self, approval_id, reason=None):
+        approval, run, checkpoint, _ = self._approval_context(approval_id, validate_workspace=False)
+        bounded_reason = sanitize_text((reason or "approval rejected")[:200])
+        rejected = self.storage.transition_approval(approval_id, ApprovalStatus.PENDING, ApprovalStatus.REJECTED, bounded_reason)
+        if rejected is None:
+            raise ApprovalError("approval is already decided")
+        events = self.storage.list_events(run.mission_run_id)
+        recorder = InMemoryTraceRecorder(events)
+        recorder.record(TraceEvent(
+            mission_id=run.mission_id,
+            mission_run_id=run.mission_run_id,
+            agent_run_id=checkpoint.current_agent_run_id,
+            sequence=len(events) + 1,
+            event_type="approval_rejected",
+            payload={"approval_id": str(rejected.approval_id), "tool_name": rejected.tool_call.tool_name, "reason": bounded_reason},
+        ))
+        recorder.record(TraceEvent(
+            mission_id=run.mission_id,
+            mission_run_id=run.mission_run_id,
+            sequence=len(events) + 2,
+            event_type="mission_finished",
+            payload={"status": "FAILED", "reason": "approval_rejected", "recovery_count": run.recovery_count},
+        ))
+        failed = run.model_copy(update={
+            "status": "FAILED",
+            "final_qa_result": {"status": "failed", "issues": ["approval_rejected"]},
+            "event_count": len(recorder.for_run(run.mission_run_id)),
+        })
+        self.storage.finalize_run(failed, recorder.for_run(run.mission_run_id)[run.event_count:])
+        return self._approval_response(rejected, failed)

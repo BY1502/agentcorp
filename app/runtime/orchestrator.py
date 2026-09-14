@@ -154,35 +154,40 @@ class BasicMissionOrchestrator:
         resumed_from_run_id: UUID | None = None,
         resumed_from_checkpoint_id: UUID | None = None,
         parent_pm_agent_run_id: UUID | None = None,
+        continue_checkpoint: CheckpointState | None = None,
+        approved_approval: PendingApproval | None = None,
+        prior_result: MissionRunResult | None = None,
     ) -> MissionRunResult:
         run_id = run_id or uuid4()
         workspace_root.mkdir(parents=True, exist_ok=True)
         workspace = workspace or workspace_root / str(run_id)
-        if resume_checkpoint is None:
+        continuing = continue_checkpoint is not None
+        if resume_checkpoint is None and not continuing:
             copytree(fixture, workspace)
         initial_test_hashes = _test_hashes(workspace)
-        self.recorder.record(
-            TraceEvent(
-                mission_id=mission_id,
-                mission_run_id=run_id,
-                sequence=1,
-                event_type="mission_started",
-                payload={
-                    key: str(value)
-                    for key, value in {
-                        "resumed_from_run_id": resumed_from_run_id,
-                        "resumed_from_checkpoint_id": resumed_from_checkpoint_id,
-                    }.items()
-                    if value is not None
-                },
+        if not continuing:
+            self.recorder.record(
+                TraceEvent(
+                    mission_id=mission_id,
+                    mission_run_id=run_id,
+                    sequence=1,
+                    event_type="mission_started",
+                    payload={
+                        key: str(value)
+                        for key, value in {
+                            "resumed_from_run_id": resumed_from_run_id,
+                            "resumed_from_checkpoint_id": resumed_from_checkpoint_id,
+                        }.items()
+                        if value is not None
+                    },
+                )
             )
-        )
-        checkpoints = []
+        checkpoints = list(prior_result.checkpoint_ids) if prior_result else []
         tools = self.tools_factory(workspace)
-        pm_id = parent_pm_agent_run_id
-        dev_ids = []
-        qa_ids = []
-        recovery_attempt = resume_checkpoint.agent_state.recovery_attempt if resume_checkpoint else 0
+        pm_id = prior_result.pm_agent_run_id if prior_result else parent_pm_agent_run_id
+        dev_ids = list(prior_result.developer_agent_run_ids) if prior_result else []
+        qa_ids = list(prior_result.qa_agent_run_ids) if prior_result else []
+        recovery_attempt = (continue_checkpoint or resume_checkpoint).agent_state.recovery_attempt if (continue_checkpoint or resume_checkpoint) else 0
         budget = _recovery_budget(manifest.runtime_config)
         policy_evaluator = self.policy_evaluator or PolicyEvaluator(
             mode=(manifest.policy_snapshot.mode if manifest.policy_snapshot else manifest.runtime_config.get("approval_mode", "disabled")),
@@ -192,11 +197,45 @@ class BasicMissionOrchestrator:
 
         def approval_handler(approval: PendingApproval, state: AgentState):
             if self.approval_store:
-                for existing in self.approval_store.list_approvals(run_id):
-                    if existing.status == "PENDING" and existing.tool_call.tool_name == approval.tool_call.tool_name and existing.tool_call.arguments_digest == approval.tool_call.arguments_digest:
+                pending = [existing for existing in self.approval_store.list_approvals(run_id) if existing.status == "PENDING"]
+                for existing in pending:
+                    if existing.tool_call.tool_name == approval.tool_call.tool_name and existing.tool_call.arguments_digest == approval.tool_call.arguments_digest:
                         return existing
+                if pending:
+                    raise ValueError("run already has a pending approval")
                 self.approval_store.save_approval(approval)
             return approval
+
+        def make_checkpoint(agent_id, agent_state):
+            if not (self.snapshot_manager and self.checkpoint_manager):
+                return None
+            snapshot = self.snapshot_manager.create(workspace)
+            checkpoint_id = self.checkpoint_manager.create(
+                CheckpointState(
+                    mission_run_id=run_id,
+                    current_agent_run_id=agent_id,
+                    current_step=agent_state.step,
+                    agent_state=agent_state,
+                    handoffs=agent_state.handoffs,
+                    skill_versions=manifest.skill_versions,
+                    workspace_snapshot_id=snapshot.id,
+                )
+            )
+            checkpoints.append(checkpoint_id)
+            return checkpoint_id
+
+        def runtime_for(tools, checkpoint):
+            return BasicAgentRuntime(
+                self.provider,
+                self.compiler,
+                tools,
+                self.recorder,
+                mission_id,
+                run_id,
+                checkpoint,
+                policy_evaluator,
+                approval_handler,
+            )
 
         def execute(role, skills, handoff, attempt=0):
             permissions = {
@@ -221,25 +260,7 @@ class BasicMissionOrchestrator:
                 recovery_attempt=attempt,
             )
 
-            def checkpoint(agent_state):
-                if self.snapshot_manager and self.checkpoint_manager:
-                    snapshot = self.snapshot_manager.create(workspace)
-                    checkpoint_id = self.checkpoint_manager.create(
-                            CheckpointState(
-                                mission_run_id=run_id,
-                                current_agent_run_id=agent_id,
-                                current_step=agent_state.step,
-                                agent_state=agent_state,
-                                handoffs=agent_state.handoffs,
-                                skill_versions=manifest.skill_versions,
-                                workspace_snapshot_id=snapshot.id,
-                            )
-                        )
-                    checkpoints.append(checkpoint_id)
-                    return checkpoint_id
-                return None
-
-            return agent_id, BasicAgentRuntime(self.provider, self.compiler, tools, self.recorder, mission_id, run_id, checkpoint, policy_evaluator, approval_handler).run(agent_id, state)
+            return agent_id, runtime_for(tools, lambda agent_state: make_checkpoint(agent_id, agent_state)).run(agent_id, state)
 
         def finish(status, final_qa, emit_finished=True):
             events = self.recorder.for_run(run_id)
@@ -281,7 +302,43 @@ class BasicMissionOrchestrator:
 
         resumed_developer = None
         recovery_context = None
-        if resume_checkpoint is None:
+        continued_developer = None
+        if continue_checkpoint is not None:
+            state = continue_checkpoint.agent_state
+            if approved_approval is None or state.agent_run_id is None:
+                return finish("FAILED", QAResult(status="failed", issues=["approval continuation state is incomplete"]))
+            pm = PMToDeveloperHandoff.model_validate(state.handoffs["pm"])
+            saved_recovery = state.handoffs.get("recovery_context")
+            if saved_recovery:
+                recovery_context = RecoveryContext.model_validate(saved_recovery)
+            continued_developer = runtime_for(tools, lambda agent_state: make_checkpoint(state.agent_run_id, agent_state)).continue_approved(state.agent_run_id, state, approved_approval)
+            if continued_developer.waiting_approval:
+                return finish("WAITING_APPROVAL", QAResult(status="pending"), False)
+            if not {"status", "summary"} <= continued_developer.handoffs.keys():
+                return finish("FAILED", QAResult(status="failed", issues=["Developer continuation did not produce a handoff"]))
+            dev = DeveloperToQAHandoff(**continued_developer.handoffs)
+            self.recorder.record(
+                TraceEvent(
+                    mission_id=mission_id,
+                    mission_run_id=run_id,
+                    sequence=len(self.recorder.for_run(run_id)) + 1,
+                    event_type="handoff_created",
+                    payload={"recovery_attempt": recovery_attempt, **dev.model_dump()},
+                )
+            )
+            checkpoint_id = make_checkpoint(state.agent_run_id, continued_developer)
+            if checkpoint_id:
+                self.recorder.record(
+                    TraceEvent(
+                        mission_id=mission_id,
+                        mission_run_id=run_id,
+                        agent_run_id=state.agent_run_id,
+                        sequence=len(self.recorder.for_run(run_id)) + 1,
+                        event_type="checkpoint_created",
+                        payload={"reason": "developer_handoff", "checkpoint_id": str(checkpoint_id), "recovery_attempt": recovery_attempt},
+                    )
+                )
+        elif resume_checkpoint is None:
             pm_id, pm_state = execute(Role.PM, ("common/tool_usage.md", "common/handoff.md", "roles/pm/SKILL.md"), {})
             if pm_state.waiting_approval:
                 return finish("WAITING_APPROVAL", QAResult(status="pending"), False)
@@ -337,7 +394,10 @@ class BasicMissionOrchestrator:
 
         qa = None
         while True:
-            if resumed_developer is not None:
+            if continued_developer is not None:
+                dev = DeveloperToQAHandoff(**continued_developer.handoffs)
+                continued_developer = None
+            elif resumed_developer is not None:
                 dev = resumed_developer
                 resumed_developer = None
             else:

@@ -2,10 +2,10 @@ from fastapi import FastAPI
 from .config import settings
 from fastapi import HTTPException
 from uuid import UUID
-from .api.schemas import EventResponse, MissionCreate, MissionResponse, ResumeRequest, RunCreate, RunResponse
+from .api.schemas import ApprovalDecisionRequest, ApprovalResponse, EventResponse, MissionCreate, MissionResponse, ResumeRequest, RunCreate, RunResponse
 from .models.registry import DisabledModelError, UnknownModelError
 from .services.mission import MissionService
-from .services.run import ApprovalError, ResumeError, ResumeNotFoundError, RunService
+from .services.run import ApprovalError, ApprovalNotFoundError, ResumeError, ResumeNotFoundError, RunService
 from .persistence.sqlite import SQLiteStore
 from .services.replay import ReplayService, RunNotFoundError
 from .domain.policy import PendingApproval
@@ -65,6 +65,24 @@ def get_approval(approval_id: UUID):
         raise HTTPException(409, str(error)) from error
     if not approval: raise HTTPException(404,'approval not found')
     return approval
+
+@app.post('/approvals/{approval_id}/approve', response_model=ApprovalResponse)
+def approve(approval_id: UUID):
+    try:
+        return runs.approve(approval_id)
+    except ApprovalNotFoundError as error:
+        raise HTTPException(404, str(error)) from error
+    except ApprovalError as error:
+        raise HTTPException(409, str(error)) from error
+
+@app.post('/approvals/{approval_id}/reject', response_model=ApprovalResponse)
+def reject(approval_id: UUID, request: ApprovalDecisionRequest | None = None):
+    try:
+        return runs.reject(approval_id, request.reason if request else None)
+    except ApprovalNotFoundError as error:
+        raise HTTPException(404, str(error)) from error
+    except ApprovalError as error:
+        raise HTTPException(409, str(error)) from error
 
 @app.post('/runs/{run_id}/resume', response_model=RunResponse)
 def resume_run(run_id: UUID, request: ResumeRequest):

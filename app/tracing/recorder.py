@@ -18,7 +18,7 @@ def sanitize(value: Any):
     return value
 
 class InMemoryTraceRecorder:
-    def __init__(self): self.events: list[TraceEvent] = []
+    def __init__(self, events: list[TraceEvent] | None = None): self.events = list(events or [])
     def record(self, event: TraceEvent) -> TraceEvent:
         expected = len([e for e in self.events if e.mission_run_id == event.mission_run_id]) + 1
         if event.sequence != expected: raise ValueError(f"expected sequence {expected}")

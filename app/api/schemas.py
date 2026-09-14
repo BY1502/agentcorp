@@ -11,6 +11,13 @@ class RunCreate(BaseModel):
     approval_mode: str | None = None
 class ResumeRequest(BaseModel):
     checkpoint_id: UUID
+class ApprovalDecisionRequest(BaseModel):
+    reason: str | None = None
+class ApprovalResponse(BaseModel):
+    approval_id: UUID
+    approval_status: str
+    run_id: UUID
+    run_status: str
 class MissionResponse(BaseModel): id: UUID; title: str; version: str; fixture: str
 class RunResponse(BaseModel):
     run_id: UUID

@@ -172,9 +172,30 @@ class SQLiteStore:
     def list_approvals(self, run_id: UUID) -> list[PendingApproval]:
         with self._lock:
             rows = self._connection.execute(
-                "SELECT approval_json FROM approvals WHERE run_id = ? ORDER BY approval_id", (str(run_id),)
+                "SELECT approval_json FROM approvals WHERE run_id = ?", (str(run_id),)
             ).fetchall()
-        return [PendingApproval.model_validate(json.loads(row["approval_json"])) for row in rows]
+        approvals = [PendingApproval.model_validate(json.loads(row["approval_json"])) for row in rows]
+        return sorted(approvals, key=lambda approval: (approval.created_at, approval.approval_id))
+
+    def transition_approval(self, approval_id: UUID, expected_status: str, new_status: str, decision_reason: str | None = None):
+        if expected_status != "PENDING" or new_status not in {"APPROVED", "REJECTED"}:
+            return None
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT approval_json FROM approvals WHERE approval_id = ?", (str(approval_id),)
+            ).fetchone()
+            if row is None:
+                return None
+            current_json = row["approval_json"]
+            approval = PendingApproval.model_validate(json.loads(current_json))
+            if approval.status != expected_status:
+                return None
+            updated = approval.model_copy(update={"status": new_status, "decision_reason": decision_reason})
+            cursor = self._connection.execute(
+                "UPDATE approvals SET approval_json = ? WHERE approval_id = ? AND approval_json = ?",
+                (_json(updated), str(approval_id), current_json),
+            )
+            return updated if cursor.rowcount == 1 else None
 
     def append_events(self, events: list[TraceEvent]) -> None:
         with self._lock, self._connection:

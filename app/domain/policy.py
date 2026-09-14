@@ -17,6 +17,12 @@ class PolicyAction(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
+class ApprovalStatus(StrEnum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 class PolicyDecision(BaseModel):
     model_config = ConfigDict(frozen=True)
     decision: PolicyAction
@@ -30,13 +36,14 @@ class ToolCallSnapshot(BaseModel):
     agent_role: Role
     arguments: dict[str, Any] = Field(default_factory=dict)
     arguments_digest: str
+    call_id: str = ""
 
     @property
     def safe_arguments(self) -> dict[str, Any]:
         return self.arguments
 
     @classmethod
-    def from_parts(cls, tool_name: str, agent_role: Role | str, arguments: dict[str, Any]):
+    def from_parts(cls, tool_name: str, agent_role: Role | str, arguments: dict[str, Any], call_id: str | None = None):
         try:
             encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
         except (TypeError, ValueError) as error:
@@ -50,6 +57,7 @@ class ToolCallSnapshot(BaseModel):
             agent_role=Role(agent_role),
             arguments=json.loads(encoded),
             arguments_digest=hashlib.sha256(encoded).hexdigest(),
+            call_id=call_id or f"call_{hashlib.sha256(encoded).hexdigest()[:16]}",
         )
 
 
@@ -60,7 +68,8 @@ class PendingApproval(BaseModel):
     tool_call: ToolCallSnapshot
     policy_id: str
     reason: str
-    status: str = "PENDING"
+    status: ApprovalStatus = ApprovalStatus.PENDING
+    decision_reason: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
