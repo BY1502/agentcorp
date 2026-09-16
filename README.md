@@ -2,7 +2,7 @@
 
 ## 프로젝트 소개
 
-AgentCorp는 LLM을 AI 직원으로 등록하고 PM / Developer / QA 직무에 배치하여 Coding Mission을 수행시키는 local-first AI 회사 시뮬레이션·평가 플랫폼입니다. 실행은 Blackbox Trace로 기록하고 Checkpoint Replay를 통해 추후 Model / Skill / Level 교체 결과를 비교합니다. 현재는 v0.1 백엔드 기반입니다.
+AgentCorp는 LLM을 AI 직원으로 등록하고 PM / Developer / QA 직무에 배치하여 Coding Mission을 수행시키는 local-first AI 회사 시뮬레이션·평가 플랫폼입니다. 실행은 Blackbox Trace로 기록하고 Checkpoint Replay를 통해 추후 Model / Skill / Level 교체 결과를 비교합니다. 현재는 v0.1 백엔드와 이를 관찰하는 로컬 React 콘솔입니다.
 
 ## 핵심 아이디어
 
@@ -35,6 +35,7 @@ QA가 실패하면 설정된 최대 retry 횟수까지 Developer가 재실행됩
 ```text
 agentcorp/
 ├── app/{api,checkpoints,domain,models,runtime,skills,tools,tracing,persistence,services}/
+├── frontend/
 ├── skills/{common,levels,roles}/  missions/  workspaces/  tests/
 ├── ARCHITECTURE.md  CONTRIBUTING.md  pyproject.toml  README.md
 ```
@@ -66,7 +67,7 @@ Checkpoint는 runtime state, handoff state, model assignment, SkillVersion snaps
 
 포함: PM, Developer, QA, coding/debugging mission 구조, FakeModelProvider, deterministic tests, local workspace, basic trace, checkpoint architecture, FastAPI foundation.
 
-미구현: frontend, interview, HR/promotion, CEO/CTO, LangChain, LangGraph, Redis, Celery, Kubernetes, advanced judge evaluation, full Blackbox UI.
+미구현: interview, HR/promotion, CEO/CTO, LangChain, LangGraph, Redis, Celery, Kubernetes, advanced judge evaluation, full Blackbox UI.
 
 ## 설치 및 실행
 
@@ -82,6 +83,16 @@ cp .env.example .env
 pytest -q
 uvicorn app.main:app --reload
 ```
+
+React 콘솔은 별도 프로세스로 실행하며 `/api` 요청을 로컬 FastAPI(`127.0.0.1:8000`)로 프록시합니다.
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+콘솔은 Overview, Missions, Experiments, Benchmark suites, Run inspector를 제공하고 기존 API로 mission/run lifecycle, approval, resume, replay, metrics, evaluation, benchmark analytics를 조회·호출합니다. 새 persistence나 mission 실행 경로는 추가하지 않았습니다.
 
 현재 API는 `GET /health`, mission 생성·조회, `POST /missions/{id}/runs`, run 조회·event 조회·replay·metrics·evaluation·approval 조회·resume, `GET /analytics/runs`, `GET /analytics/models`, `POST /experiments`, `GET /experiments/{id}`, `POST /experiments/{id}/seal`, `POST /experiments/{id}/execute`, `GET /experiments/{id}/runs`, `GET /experiments/{id}/analytics`, `POST /benchmark-suites`, `GET /benchmark-suites`, `GET /benchmark-suites/{suite_id}/versions/{version}`, `POST /benchmark-suites/{suite_id}/versions/{version}/publish`를 제공합니다. Metrics, evaluation, aggregate analytics는 persisted Run/Event/Checkpoint/Approval/Manifest에서 계산하는 결정적 read model이며 provider·tool·LLM judge를 호출하거나 historical data를 변경하지 않습니다. Experiment analytics는 ExperimentCell mapping만 읽고 PHASE 8 집계 semantics를 재사용하며 current registry를 조회하지 않습니다. Aggregate model group은 frozen `ModelExecutionSnapshot`을 사용하며 base URL은 identity에서 제외합니다. Experiments는 inline cases 또는 명시된 Published BenchmarkSuite version 중 하나를 workload source로 받아 ordered case snapshot과 suite provenance를 저장하고, sealed execution은 case × model × repetition을 기존 동기 Run 경로로 순차 실행합니다. run 생성 body에 선택적 `model_id`, `approval_mode`를 전달할 수 있으며 생략하면 설정된 기본값을 사용합니다.
 
@@ -138,7 +149,7 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 제공합니다. 기본 저장소는 `AGENTCORP_STORAGE_PATH`(기본 `data/agentcorp.db`)의 SQLite이며, 서비스 단위 테스트는 in-memory adapter를 사용할 수 있습니다. 실제 기본 mission 실행, frontend, Blackbox UI, arbitrary fork/replay UI, interview, HR/promotion, distributed execution은 아직 없습니다.
+API는 mission 생성·조회, 동기 run 실행, run 조회, event 조회를 제공합니다. 기본 저장소는 `AGENTCORP_STORAGE_PATH`(기본 `data/agentcorp.db`)의 SQLite이며, 서비스 단위 테스트는 in-memory adapter를 사용할 수 있습니다. 실제 기본 mission 실행, full Blackbox UI, arbitrary fork/replay UI, interview, HR/promotion, distributed execution은 아직 없습니다.
 
 `GET /runs/{id}/replay`는 저장된 Run/Manifest/Event/Checkpoint/WorkspaceSnapshot을 읽어 historical timeline을 구성하는 read-only inspection입니다. ModelConfig 재해석, provider/model/tool 호출, workspace 변경, event/checkpoint 추가는 하지 않으며 Replay와 Resume는 구분됩니다.
 

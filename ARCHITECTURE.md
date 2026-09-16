@@ -176,6 +176,7 @@ PHASE 9 Step 2 adds deterministic sequential matrix execution. A SEALED experime
 PHASE 9 Step 3 adds read-only `ExperimentAnalyticsService`. It selects Runs only through persisted ExperimentCell mappings, reuses PHASE 8 `RunMetricsService`, `RunEvaluationService`, and `RunAggregateService`, and compares overall, frozen-model, and case aggregates. It reports coverage and mapping integrity without mutating records or invoking providers, tools, runtime, experiment execution, or the model registry. PHASE 9 is complete; winner/ranking/score/judge/recommendation features remain deferred.
 PHASE 10 Step 1 adds persisted, reusable `BenchmarkSuite` definitions. A suite uses `suite_id` + positive integer `version`, ordered immutable `BenchmarkCaseSpec` values, `DRAFT`/`PUBLISHED` lifecycle, portable workspace references, and a deterministic SHA-256 digest of execution-relevant fields. Publish validates the non-empty case set and workspace directories atomically; suite create/read/publish invokes no provider, tool, model registry, Mission, Run, Experiment, or workspace mutation. Experiment-to-suite integration is deferred to Step 2.
 PHASE 10 Step 2 connects only `PUBLISHED` suite versions to Experiment creation. The service verifies the persisted digest once, copies the ordered suite cases into the Experiment, and persists typed `BenchmarkSuiteProvenance`; the client may provide only the explicit suite ID/version because the server freezes the digest. Inline cases remain supported, but inline and suite workloads are exclusive. After creation, seal, execution, and analytics use only the Experiment snapshot and never re-read the suite repository; model resolution still happens at the existing seal boundary. No suite execution engine, latest-version lookup, campaign, or ranking is added.
+
 - Full checkpoint branching UX; v0.1 provides serializable state and a local copy-based fork seam.
 - PostgreSQL deployment, migrations beyond basic setup, multi-process workers, queues, Redis, Celery, Docker Compose, Kubernetes, and microservices.
 - Arbitrary shell execution, unrestricted tools, browser/network tools, and long-running async orchestration.
@@ -183,6 +184,12 @@ PHASE 10 Step 2 connects only `PUBLISHED` suite versions to Experiment creation.
 - Token-budget optimization, prompt caching, advanced model routing, and vendor-specific features.
 
 These are deliberately postponed because they do not prove the core observability/replayability loop and would make the first implementation harder to reason about.
+
+## React console
+
+`frontend/` is a minimal Vite + React presentation layer for the existing FastAPI contracts. It provides local views for the overview, missions, experiments, benchmark suites, and run inspection flows, including approval, resume, replay, metrics, evaluation, and experiment analytics actions. The development server proxies `/api` to `127.0.0.1:8000`; the console adds no persistence, provider calls, mission orchestration, or new domain semantics.
+
+This local console is the scoped exception to the deferred frontend item above; production frontend concerns and full Blackbox visualization remain deferred.
 
 ## 10. Incremental implementation order
 
@@ -196,4 +203,4 @@ These are deliberately postponed because they do not prove the core observabilit
 
 ## 11. Approved scope boundary
 
-The original v0.1 limits remain unchanged: no frontend, interview system, HR/promotion, CEO/CTO features, LangChain, LangGraph, Redis, Celery, Docker orchestration, or advanced evaluation. PHASE 2 defines seams for future capabilities without implementing them.
+The original v0.1 limits remain unchanged for production concerns: no full Blackbox UI, interview system, HR/promotion, CEO/CTO features, LangChain, LangGraph, Redis, Celery, Docker orchestration, or advanced evaluation. The local React console is a thin presentation layer over the existing API and does not add domain behavior.
