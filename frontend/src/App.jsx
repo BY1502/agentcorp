@@ -34,6 +34,12 @@ const METRIC_LABELS = {
   checkpoint_count: "체크포인트", integrity_status: "무결성",
 };
 
+const DEPARTMENTS = [
+  { key: "pm", view: "missions", name: "PM 본부", member: "미나", role: "프로덕트 매니저", icon: "🧑🏻‍💼", task: "미션 설계 및 우선순위", accent: "pink" },
+  { key: "dev", view: "missions", name: "개발 스튜디오", member: "준", role: "시니어 개발자", icon: "🧑🏻‍💻", task: "코드 수정 및 구현", accent: "cyan" },
+  { key: "qa", view: "runs", name: "QA 랩", member: "소라", role: "품질 검증 담당", icon: "🧑🏻‍🔬", task: "테스트 evidence 검증", accent: "violet" },
+];
+
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -136,14 +142,42 @@ function Sidebar({ view, navigate, health }) {
     <div className="sidebar-spacer" />
     <div className="agent-roster"><span className="roster-title">현재 접속 중인 직원</span><div><i className="roster-orb pm" /><span>PM</span><b>대기</b></div><div><i className="roster-orb dev" /><span>Developer</span><b>대기</b></div><div><i className="roster-orb qa" /><span>QA</span><b>대기</b></div></div>
     <div className="runtime-card"><div className="live-dot" /><div><strong>런타임 온라인</strong><span>{health?.status === "ok" ? "FastAPI 연결됨" : "API 연결 필요"}</span></div></div>
-    <div className="sidebar-foot">LOCAL / SAFE BY DEFAULT<br /><span>관찰 · 재현 · 비교 가능</span></div>
+    <div className="sidebar-foot">LOCAL / 기본 안전<br /><span>관찰 · 재현 · 비교 가능</span></div>
   </aside>;
+}
+
+function Character({ department }) {
+  return <div className={`character character-${department.accent}`} aria-label={`${department.member} 캐릭터`}>
+    <div className="character-aura" />
+    <div className="character-head">{department.icon}</div>
+    <div className="character-body"><span>{department.key.toUpperCase()}</span></div>
+    <div className="character-shadow" />
+  </div>;
+}
+
+function DepartmentCard({ department, active, onEnter }) {
+  return <button className={`department-card department-${department.accent}`} onClick={onEnter}>
+    <div className="department-top"><span className="room-id">ROOM / {department.key.toUpperCase()}</span><span className="room-status"><i />{active ? "작업 중" : "대기 중"}</span></div>
+    <div className="department-main"><Character department={department} /><div className="employee-copy"><span className="employee-role">{department.role}</span><strong>{department.member}</strong><small>{department.task}</small></div></div>
+    <div className="department-desk"><span /><span /><span /></div>
+    <div className="department-foot"><span>{department.name}</span><b>입장 ↗</b></div>
+  </button>;
+}
+
+function OfficeFloor({ data, navigate }) {
+  const aggregate = data.aggregate || {};
+  const active = (aggregate.run_count || 0) > 0;
+  return <section className="office-shell">
+    <div className="office-topbar"><div><span className="eyebrow">AGENTCORP 본사 / 서울-01</span><h2>AI 회사 본부</h2><p>실제 직원처럼 배치된 에이전트들이 이 공간에서 미션을 처리합니다.</p></div><div className="office-live"><span className="live-badge"><i /> LIVE</span><span>직원 3명 · {active ? "작전 진행 중" : "첫 작전 대기"}</span></div></div>
+    <div className="office-content"><div className="office-floor"><div className="floor-label">MAIN FLOOR / 01</div><div className="floor-lines" /><div className="department-grid">{DEPARTMENTS.map((department) => <DepartmentCard key={department.key} department={department} active={active} onEnter={() => navigate(department.view)} />)}</div><div className="office-lounge"><span>AC</span><small>공용 라운지</small></div><div className="floor-route route-one" /><div className="floor-route route-two" /></div><aside className="company-feed"><div className="feed-heading"><div><span className="eyebrow">회사 활동</span><h3>오늘의 흐름</h3></div><span className="feed-count">LIVE</span></div><div className="feed-item"><span className="feed-time">NOW</span><div><strong>실행 기록 수집 중</strong><small>{aggregate.run_count ?? 0}개의 MissionRun 관측됨</small></div></div><div className="feed-item"><span className="feed-time">QA</span><div><strong>품질 게이트 대기</strong><small>run_test evidence를 확인합니다</small></div></div><div className="feed-item"><span className="feed-time">SYS</span><div><strong>월드 동기화 완료</strong><small>재현 가능한 실행 환경 유지</small></div></div><div className="company-note"><span>회사 상태</span><strong>모든 시스템 정상</strong><i /></div></aside></div>
+  </section>;
 }
 
 function Overview({ data, navigate }) {
   const aggregate = data.aggregate || {};
   const models = data.models || [];
   return <div className="page-stack">
+    <OfficeFloor data={data} navigate={navigate} />
     <section className="hero"><div className="hero-copy"><span className="eyebrow">AGENTCORP 가상 본부</span><h2>모든 실행을<br /><em>하나의 세계에서.</em></h2><p>PM · Developer · QA 에이전트가 미션을 수행하는 실시간 AI 회사 시뮬레이션입니다.</p><div className="hero-readout"><span><i className="signal-dot" /> 시스템 정상</span><span>월드 시드 #V01</span></div></div><div className="hero-art"><div className="scene-grid" /><div className="hero-ring ring-one" /><div className="hero-ring ring-two" /><div className="hero-core">AC<span>·</span></div><div className="hero-node node-pm">PM</div><div className="hero-node node-dev">DEV</div><div className="hero-node node-qa">QA</div><div className="hero-caption">LIVE WORLD<br />OBSERVE / DECIDE</div></div></section>
     <div className="kpi-grid"><Kpi label="전체 실행" value={aggregate.run_count ?? 0} hint={`${aggregate.evaluated_run_count ?? 0}개 평가됨`} /><Kpi label="최종 통과율" value={aggregate.terminal_pass_rate == null ? "—" : `${Math.round(aggregate.terminal_pass_rate * 100)}%`} hint={`${aggregate.passed_count ?? 0}개 통과`} tone="teal" /><Kpi label="도구 호출" value={aggregate.tool_call_count ?? 0} hint={`${aggregate.tool_failure_count ?? 0}개 실패`} tone="orange" /><Kpi label="복구 실행" value={aggregate.recovery_run_count ?? 0} hint={`${aggregate.recovered_to_pass_count ?? 0}개 회복`} tone="violet" /></div>
     <div className="content-grid overview-grid"><Panel title="에이전트 성능" eyebrow="PHASE 8 · 관측 집계" action={<button className="text-button" onClick={() => navigate("experiments")}>실험실 열기 →</button>}>
