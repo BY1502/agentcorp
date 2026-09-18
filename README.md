@@ -84,7 +84,7 @@ pytest -q
 uvicorn app.main:app --reload
 ```
 
-React 콘솔은 별도 프로세스로 실행하며 `/api` 요청을 로컬 FastAPI(`127.0.0.1:8000`)로 프록시합니다.
+React 콘솔은 별도 프로세스로 실행하며 `/api` 요청을 로컬 FastAPI(`127.0.0.1:8000`)로 프록시합니다. 해당 포트가 이미 사용 중이면 `VITE_API_PROXY_TARGET`으로 AgentCorp API 포트를 지정할 수 있습니다.
 
 ```bash
 cd frontend
